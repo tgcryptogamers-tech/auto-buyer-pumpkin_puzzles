@@ -649,12 +649,14 @@ class LootBuyerAccessibilityService : AccessibilityService() {
         AutoBuyerLogs.addLog("⚡ [ПЕРЕКЛЮЧЕНИЕ] Переход на '${getTabDisplayName(alternateTab)}' -> (${altCoords.first.toInt()}, ${altCoords.second.toInt()})")
         clickAtWithRandomization(altCoords.first, altCoords.second, config)
 
-        delay(getTabSwitchDelay(config))
+        delay(getTabSwitchDelay(config) + 40L)
 
         AutoBuyerLogs.addLog("⚡ [ПЕРЕКЛЮЧЕНИЕ] Возврат на '${getTabDisplayName(targetCategoryTab)}' -> (${targetCoords.first.toInt()}, ${targetCoords.second.toInt()})")
         clickAtWithRandomization(targetCoords.first, targetCoords.second, config)
 
-        delay(getTabSwitchDelay(config))
+        // Webview stabilization wait: give the Telegram webview 380-500ms to fetch and render the new lot list
+        val postSwitchSettleDelay = maxOf(380L, config.tabSwitchIntervalMs * 2)
+        delay(postSwitchSettleDelay)
 
         // Capture FRESH screen showing the target tab listings!
         val freshBitmap = MediaProjectionHelper.getLatestScreenshot()
@@ -718,24 +720,33 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                 }
             }
 
-            // Parse and Group listings strictly from the market items area (51% to 88% of screen height)
-            // Anything above 50% contains headers, balance, Sell/Buy buttons, filters, tabs, and "Showed: 1-1"
-            val listingsTopLimit = freshBitmap.height * 0.50f
-            val listingsBottomLimit = freshBitmap.height * 0.88f
+            // Detect lot cards and handshake buttons with OpenCV Computer Vision
+            val visionLotCards = try {
+                OpenCvVisionEngine.findLotCards(freshBitmap, screenWidth, screenHeight)
+            } catch (e: Exception) {
+                emptyList()
+            }
+            if (visionLotCards.isNotEmpty() && config.verboseOcrLogging) {
+                AutoBuyerLogs.addLog("👁️ [OpenCV] Обнаружено ${visionLotCards.size} карточек лотов (рукопожатий) на экране.")
+            }
+
+            // Parse and Group listings strictly from the market items area (46% to 90% of screen height)
+            val listingsTopLimit = freshBitmap.height * 0.46f
+            val listingsBottomLimit = freshBitmap.height * 0.90f
             
             val listingLines = freshFilteredLines.filter { line ->
                 val bounds = line.boundingBox ?: return@filter false
                 val centerY = bounds.centerY().toFloat()
                 val lineText = line.text.lowercase().trim()
+                val extracted = extractPrice(line.text)
                 
-                // Exclude headers, tabs, system labels
-                val isHeaderLabel = lineText.contains("showed") || lineText.contains("from") ||
-                        lineText.contains("price") || lineText.contains("resource") ||
-                        lineText.contains("sell") || lineText.contains("buy") ||
-                        lineText.contains("token") || lineText.contains("market")
+                // Exclude pure headers and system labels that don't have price numbers
+                val isPureHeaderLabel = (lineText.contains("showed") || lineText.contains("from") ||
+                        lineText.contains("resource") || lineText.contains("market") ||
+                        lineText.contains("dwarf") || (lineText.contains("low") && !line.text.any { it.isDigit() })) && extracted == null
                 
-                centerY in listingsTopLimit..listingsBottomLimit && !isHeaderLabel &&
-                        line.text.any { it.isDigit() || it in listOf('o', 'O', 'I', 'l', 's', 'S', 'B') }
+                centerY in listingsTopLimit..listingsBottomLimit && !isPureHeaderLabel &&
+                        (extracted != null || line.text.any { it.isDigit() || it in listOf('o', 'O', 'I', 'l', 's', 'S', 'B', 'D', 'd', 'Q') })
             }
 
             // Group lines into rows by vertical alignment (within 65 pixels)
@@ -812,6 +823,8 @@ class LootBuyerAccessibilityService : AccessibilityService() {
 
             AutoBuyerLogs.addLog("=== [ОБНАРУЖЕННЫЕ ЛОТЫ] ===")
             var foundLotsCount = 0
+
+            // Stage 1: Check full-screen OCR rows
             for (row in horizontalRows) {
                 // Find all numbers with their bounding boxes
                 val numberPairs = row.mapNotNull { line ->
@@ -837,18 +850,18 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                     val matchesThreshold = if (!config.usePriceThreshold) {
                         true
                     } else if (config.isLessThanOperator) {
-                        price < config.priceThreshold
+                        price <= (config.priceThreshold + 0.0001)
                     } else {
-                        price > config.priceThreshold
+                        price >= (config.priceThreshold - 0.0001)
                     }
 
                     val conditionReason = if (!config.usePriceThreshold) {
                         "лимит по цене отключен"
                     } else if (matchesThreshold) {
-                        val operatorWord = if (config.isLessThanOperator) "ниже" else "выше"
+                        val operatorWord = if (config.isLessThanOperator) "≤ (ниже или равна)" else "≥ (выше или равна)"
                         "цена $price $operatorWord ${config.priceThreshold}"
                     } else {
-                        val operatorWord = if (config.isLessThanOperator) "выше" else "ниже"
+                        val operatorWord = if (config.isLessThanOperator) "> (выше порога)" else "< (ниже порога)"
                         "цена $price $operatorWord ${config.priceThreshold}"
                     }
 
@@ -1052,6 +1065,117 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                 }
             }
 
+            // Stage 2: Fallback to targeted OpenCV lot card Price ROI OCR if full-screen OCR missed numbers
+            if (foundLotsCount == 0 && visionLotCards.isNotEmpty()) {
+                if (config.verboseOcrLogging) {
+                    AutoBuyerLogs.addLog("🎯 [OpenCV Fallback] Анализируем изолированные области цен обнаруженных лот-карт...")
+                }
+                for (card in visionLotCards) {
+                    val pRect = card.priceCropRect
+                    if (pRect.width() > 10 && pRect.height() > 10) {
+                        val cropBmp = try {
+                            Bitmap.createBitmap(freshBitmap, pRect.left, pRect.top, pRect.width(), pRect.height())
+                        } catch (e: Exception) {
+                            null
+                        }
+                        if (cropBmp != null) {
+                            try {
+                                val cropInput = InputImage.fromBitmap(cropBmp, 0)
+                                val cropResult = Tasks.await(recognizer.process(cropInput))
+                                val detectedText = cropResult.text
+                                val extractedPrice = extractPrice(detectedText)
+                                if (extractedPrice != null) {
+                                    foundLotsCount++
+                                    val price = extractedPrice
+                                    val q = 1.0
+
+                                    val matchesThreshold = if (!config.usePriceThreshold) {
+                                        true
+                                    } else if (config.isLessThanOperator) {
+                                        price <= (config.priceThreshold + 0.0001)
+                                    } else {
+                                        price >= (config.priceThreshold - 0.0001)
+                                    }
+
+                                    val conditionReason = if (!config.usePriceThreshold) {
+                                        "лимит по цене отключен"
+                                    } else if (matchesThreshold) {
+                                        val operatorWord = if (config.isLessThanOperator) "≤ (ниже или равна)" else "≥ (выше или равна)"
+                                        "цена $price $operatorWord ${config.priceThreshold}"
+                                    } else {
+                                        val operatorWord = if (config.isLessThanOperator) "> (выше порога)" else "< (ниже порога)"
+                                        "цена $price $operatorWord ${config.priceThreshold}"
+                                    }
+
+                                    val decisionText = if (matchesThreshold) {
+                                        if (config.enableActualBuying) {
+                                            "условия для покупки соблюдаются ($conditionReason). покупка разрешена"
+                                        } else {
+                                            "условия для покупки соблюдаются ($conditionReason). покупка разрешена (режим только логирования)"
+                                        }
+                                    } else {
+                                        "условия для покупки не соблюдаются ($conditionReason)"
+                                    }
+
+                                    AutoBuyerLogs.addLog("Lot $foundLotsCount (OpenCV ROI) - Цена $price ($decisionText)")
+
+                                    if (matchesThreshold && config.enableActualBuying) {
+                                        val actualItemName = when {
+                                            targetCategoryTab.contains("copper", ignoreCase = true) || targetCategoryTab.contains("медь", ignoreCase = true) || targetCategoryTab.contains("медн", ignoreCase = true) -> "Copper puzzles"
+                                            targetCategoryTab.contains("silver", ignoreCase = true) || targetCategoryTab.contains("серебр", ignoreCase = true) -> "Silver puzzles"
+                                            targetCategoryTab.contains("gold", ignoreCase = true) || targetCategoryTab.contains("золот", ignoreCase = true) -> "Gold puzzles"
+                                            targetCategoryTab.contains("diamond", ignoreCase = true) || targetCategoryTab.contains("алмаз", ignoreCase = true) -> "Diamond puzzles"
+                                            targetCategoryTab.contains("dwarves", ignoreCase = true) || targetCategoryTab.contains("гном", ignoreCase = true) -> "Mine dwarves"
+                                            else -> targetCategoryTab
+                                        }
+
+                                        val clickX = card.handshakeCenterX
+                                        val clickY = card.handshakeCenterY
+                                        AutoBuyerLogs.addLog("👉 Кликаем по кнопке рукопожатия OpenCV в ($clickX, $clickY) для покупки...")
+                                        clickAtWithRandomization(clickX, clickY, config)
+                                        delay(CONFIRMATION_DIALOG_DELAY_MS)
+
+                                        val finalConfirmX = if (config.calibratedConfirmX != -1f) config.calibratedConfirmX else cachedBuyX
+                                        val finalConfirmY = if (config.calibratedConfirmY != -1f) config.calibratedConfirmY else cachedBuyY
+                                        if (finalConfirmX != null && finalConfirmY != null) {
+                                            AutoBuyerLogs.addLog("⚡ [ПОДТВЕРЖДЕНИЕ] Нажимаем кнопку 'Buy' в координатах ($finalConfirmX, $finalConfirmY)")
+                                            clickAtWithRandomization(finalConfirmX, finalConfirmY, config)
+                                            try {
+                                                val purchaseMsg = formatPurchaseMessage(q, actualItemName, price)
+                                                db.purchaseDao().insertPurchase(
+                                                    PurchaseRecord(
+                                                        timestamp = System.currentTimeMillis(),
+                                                        itemName = actualItemName,
+                                                        price = price,
+                                                        quantity = q,
+                                                        details = purchaseMsg
+                                                    )
+                                                )
+                                                registerPurchaseSuccess()
+                                                AutoBuyerLogs.addLog("🎉 $purchaseMsg")
+                                            } catch (e: Exception) {
+                                                AutoBuyerLogs.addLog("⚠️ Ошибка записи покупки: ${e.message}")
+                                            }
+                                            cooldownUntilMillis = System.currentTimeMillis() + 15 * 1000L
+                                            lastPurchasedPrice = price
+                                            lastPurchasedQuantity = q
+                                            lastPurchaseAttemptTime = System.currentTimeMillis()
+                                            isStuckCheckPending = true
+                                            verifyPurchaseResultAndHandleFailure(price, q, config)
+                                        }
+                                        break
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                // ignore crop ocr error
+                            } finally {
+                                cropBmp.recycle()
+                            }
+                        }
+                    }
+                }
+            }
+
             if (foundLotsCount == 0) {
                 AutoBuyerLogs.addLog("🔍 Активные лоты на текущем экране не распознаны.")
             }
@@ -1123,12 +1247,12 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                 val matchesThreshold = if (!config.usePriceThreshold) {
                     true // Bypass price threshold checks entirely!
                 } else if (config.isLessThanOperator) {
-                    priceValue < config.priceThreshold
+                    priceValue <= (config.priceThreshold + 0.0001)
                 } else {
-                    priceValue > config.priceThreshold
+                    priceValue >= (config.priceThreshold - 0.0001)
                 }
 
-                val operatorSymbol = if (config.isLessThanOperator) "<" else ">"
+                val operatorSymbol = if (config.isLessThanOperator) "≤" else "≥"
                 if (!config.usePriceThreshold) {
                     AutoBuyerLogs.addLog("Price check: SKIPPED (Bypassing threshold filter)")
                 } else {
@@ -1203,12 +1327,12 @@ class LootBuyerAccessibilityService : AccessibilityService() {
         }
 
         val matchesThreshold = if (config.isLessThanOperator) {
-            currentPrice < config.priceThreshold
+            currentPrice <= (config.priceThreshold + 0.0001)
         } else {
-            currentPrice > config.priceThreshold
+            currentPrice >= (config.priceThreshold - 0.0001)
         }
 
-        val operatorSymbol = if (config.isLessThanOperator) "<" else ">"
+        val operatorSymbol = if (config.isLessThanOperator) "≤" else "≥"
         AutoBuyerLogs.addLog("Macro Price check: $currentPrice $operatorSymbol ${config.priceThreshold} ? -> $matchesThreshold")
 
         if (matchesThreshold) {
@@ -1298,18 +1422,37 @@ class LootBuyerAccessibilityService : AccessibilityService() {
 
     /**
      * Extracts numerical price from text using Regex.
-     * E.g. "Price: 1,500$" -> 1500.0, "500 руб" -> 500.0
+     * E.g. "Price: 1,500$" -> 1500.0, "100.0000" -> 100.0, "TOKEN 100.0000" -> 100.0
      */
     private fun extractPrice(text: String): Double? {
         if (text.isBlank()) return null
         try {
-            var cleaned = text.replace(" ", "")
-            // Normalize common OCR character misidentifications in gaming fonts
+            var cleaned = text.uppercase()
+            // Remove common word tokens that might appear adjacent to price in MM game
+            cleaned = cleaned
+                .replace("TOKEN", "")
+                .replace("MM", "")
+                .replace("PRICE", "")
+                .replace("BUY", "")
+                .replace("SELL", "")
+                .replace("LOT", "")
+                .replace("SHOWED", "")
+                .replace("FROM", "")
+                .replace("RESOURCE", "")
+                .replace("LOW", "")
+                .replace(" ", "")
+                .trim()
+
+            // Normalize common OCR character misidentifications in gaming / gothic fonts
             cleaned = cleaned
                 .replace('O', '0')
                 .replace('o', '0')
+                .replace('D', '0')
+                .replace('d', '0')
+                .replace('Q', '0')
                 .replace('I', '1')
                 .replace('l', '1')
+                .replace('L', '1')
                 .replace('|', '1')
                 .replace('i', '1')
                 .replace('S', '5')
@@ -1320,13 +1463,17 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                 .replace('z', '2')
                 .replace('Z', '2')
 
-            // Normalize commas/dots
-            if (!cleaned.contains('.') && cleaned.contains(',')) {
-                cleaned = cleaned.replace(',', '.')
+            // Normalize separators: convert colons, commas, apostrophes to dots
+            cleaned = cleaned.replace(':', '.').replace(',', '.').replace('\'', '.')
+
+            // If string has multiple dots, keep only the first valid decimal dot
+            if (cleaned.count { it == '.' } > 1) {
+                val firstDot = cleaned.indexOf('.')
+                cleaned = cleaned.substring(0, firstDot + 1) + cleaned.substring(firstDot + 1).replace(".", "")
             }
 
-            // SMART OCR RECOVERY: The game strictly formats all prices and quantities with decimal places (e.g. 0.8000).
-            // If OCR misread the dot entirely (e.g., "08000" or "8000"), but the number has 4 or more digits,
+            // SMART OCR RECOVERY: The game strictly formats all prices and quantities with decimal places (e.g. 100.0000, 0.8000).
+            // If OCR misread the dot entirely (e.g., "1000000" or "8000"), but the number has 4 or more digits,
             // we reconstruct the dot at exactly 4 positions from the end if there's no dot present.
             if (!cleaned.contains('.')) {
                 val digitsOnly = cleaned.filter { it.isDigit() }

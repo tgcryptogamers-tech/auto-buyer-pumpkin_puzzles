@@ -680,7 +680,7 @@ fun DashboardScreen(
                             },
                             shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
                         ) {
-                            Text("LESS THAN (<)", fontSize = 12.sp)
+                            Text("≤ LESS OR EQUAL (<=)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                         SegmentedButton(
                             selected = !isLessThan,
@@ -690,7 +690,7 @@ fun DashboardScreen(
                             },
                             shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
                         ) {
-                            Text("GREATER THAN (>)", fontSize = 12.sp)
+                            Text("≥ GREATER OR EQUAL (>=)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
