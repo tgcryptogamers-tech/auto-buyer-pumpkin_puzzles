@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">auto-buyer-arc</string>
+    <string name="accessibility_description">This service is required to dispatch tap gestures and read price text on external app screen surfaces for Auto-Buyer functions.</string>
+</resources>
