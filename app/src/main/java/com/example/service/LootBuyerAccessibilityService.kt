@@ -671,13 +671,13 @@ class LootBuyerAccessibilityService : AccessibilityService() {
         AutoBuyerLogs.addLog("⚡ [ПЕРЕКЛЮЧЕНИЕ] Переход на '${getTabDisplayName(alternateTab)}' -> (${altCoords.first.toInt()}, ${altCoords.second.toInt()})")
         clickAtWithRandomization(altCoords.first, altCoords.second, config)
 
-        delay(getTabSwitchDelay(config) + 40L)
+        delay(getTabSwitchDelay(config))
 
         AutoBuyerLogs.addLog("⚡ [ПЕРЕКЛЮЧЕНИЕ] Возврат на '${getTabDisplayName(targetCategoryTab)}' -> (${targetCoords.first.toInt()}, ${targetCoords.second.toInt()})")
         clickAtWithRandomization(targetCoords.first, targetCoords.second, config)
 
-        // Webview stabilization wait: give the Telegram webview 380-500ms to fetch and render the new lot list
-        val postSwitchSettleDelay = maxOf(380L, config.tabSwitchIntervalMs * 2)
+        // Webview stabilization wait: directly follows user configuration (tabSwitchIntervalMs) without artificial multipliers or 380ms floor
+        val postSwitchSettleDelay = maxOf(40L, config.tabSwitchIntervalMs)
         delay(postSwitchSettleDelay)
 
         // Capture FRESH screen showing the target tab listings!
@@ -1282,7 +1282,7 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             GestureDescription.StrokeDescription(
                 path,
                 0, // start time
-                80 // duration (tap duration)
+                35 // duration (snappy tap duration)
             )
         )
         dispatchGesture(
@@ -1313,7 +1313,7 @@ class LootBuyerAccessibilityService : AccessibilityService() {
     }
 
     private fun getTabSwitchDelay(config: AppConfiguration): Long {
-        val base = maxOf(80L, config.tabSwitchIntervalMs)
+        val base = maxOf(20L, config.tabSwitchIntervalMs)
         val randMax = config.tabSwitchRandomizationMs
         return if (randMax > 0) {
             val randomOffset = (0..randMax).random()
