@@ -553,27 +553,33 @@ class LootBuyerAccessibilityService : AccessibilityService() {
         val screenHeight = metrics.heightPixels.toFloat()
         val density = metrics.density
 
-        // Identify target tab and active gems
-        val activeGems = config.selectedGems.split(",")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .ifEmpty { listOf("Copper puzzles", "Silver puzzles") }
-
-        // Multi-gem rotation between selected gems (e.g. Copper puzzles and Silver puzzles)
-        val currentGemIndex = (multiGemIndex % activeGems.size).coerceAtLeast(0)
-        val targetCategoryTab = activeGems[currentGemIndex]
-        val alternateTab = if (activeGems.size > 1) {
-            val nextIndex = (currentGemIndex + 1) % activeGems.size
-            activeGems[nextIndex]
-        } else {
-            when {
-                targetCategoryTab.contains("Copper", ignoreCase = true) -> "Silver puzzles"
-                targetCategoryTab.contains("Silver", ignoreCase = true) -> "Copper puzzles"
-                else -> "Silver puzzles"
-            }
+        // Target tab is determined strictly by the target item configured by user (e.g. "Copper puzzles")
+        val targetFromConfig = when {
+            config.targetItemName.contains("copper", ignoreCase = true) || config.targetItemName.contains("медь", ignoreCase = true) || config.targetItemName.contains("медн", ignoreCase = true) -> "Copper puzzles"
+            config.targetItemName.contains("silver", ignoreCase = true) || config.targetItemName.contains("серебр", ignoreCase = true) -> "Silver puzzles"
+            config.targetItemName.contains("gold", ignoreCase = true) || config.targetItemName.contains("золот", ignoreCase = true) -> "Gold puzzles"
+            config.targetItemName.contains("diamond", ignoreCase = true) || config.targetItemName.contains("алмаз", ignoreCase = true) -> "Diamond puzzles"
+            config.targetItemName.contains("dwarves", ignoreCase = true) || config.targetItemName.contains("гном", ignoreCase = true) -> "Mine dwarves"
+            config.targetItemName.contains("emerald", ignoreCase = true) || config.targetItemName.contains("изум", ignoreCase = true) -> "Изумруд"
+            config.targetItemName.contains("ruby", ignoreCase = true) || config.targetItemName.contains("руб", ignoreCase = true) -> "Рубин"
+            config.targetItemName.contains("sapphire", ignoreCase = true) || config.targetItemName.contains("сап", ignoreCase = true) -> "Сапфир"
+            config.targetItemName.contains("ore", ignoreCase = true) || config.targetItemName.contains("руда", ignoreCase = true) -> "Руда"
+            else -> null
         }
-        if (activeGems.size > 1) {
-            multiGemIndex = (multiGemIndex + 1) % activeGems.size
+
+        val targetCategoryTab = targetFromConfig ?: run {
+            val gems = config.selectedGems.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            gems.firstOrNull() ?: "Copper puzzles"
+        }
+
+        // The alternate tab is used ONLY as a dummy tab to trigger a market refresh and bounce immediately back
+        val alternateTab = when {
+            targetCategoryTab.contains("Copper", ignoreCase = true) -> {
+                val other = config.selectedGems.split(",").map { it.trim() }.firstOrNull { !it.contains("Copper", ignoreCase = true) && it.isNotEmpty() }
+                other ?: "Silver puzzles"
+            }
+            targetCategoryTab.contains("Silver", ignoreCase = true) -> "Copper puzzles"
+            else -> "Silver puzzles"
         }
 
         // STEP 1: VERIFY OR DISCOVER TABS VIA OPENCV COMPUTER VISION & OCR
@@ -667,16 +673,18 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             }
         }
 
-        // STEP 2: SWITCH STRICTLY BETWEEN THE RECOGNIZED GEMS
-        AutoBuyerLogs.addLog("⚡ [ПЕРЕКЛЮЧЕНИЕ] Переход на '${getTabDisplayName(alternateTab)}' -> (${altCoords.first.toInt()}, ${altCoords.second.toInt()})")
+        // STEP 2: FAST BOUNCE TO REFRESH TAB (SILVER) AND IMMEDIATELY RETURN TO TARGET TAB (COPPER)
+        AutoBuyerLogs.addLog("⚡ [ОБНОВЛЕНИЕ] Быстрый переход на '${getTabDisplayName(alternateTab)}' для сброса рынка...")
         clickAtWithRandomization(altCoords.first, altCoords.second, config)
 
-        delay(getTabSwitchDelay(config))
+        // Ultra-fast bounce delay: just enough for the game webview to register the tap (30-60ms)
+        val bounceDelay = minOf(60L, maxOf(30L, config.tabSwitchIntervalMs / 4))
+        delay(bounceDelay)
 
         AutoBuyerLogs.addLog("⚡ [ПЕРЕКЛЮЧЕНИЕ] Возврат на '${getTabDisplayName(targetCategoryTab)}' -> (${targetCoords.first.toInt()}, ${targetCoords.second.toInt()})")
         clickAtWithRandomization(targetCoords.first, targetCoords.second, config)
 
-        // Webview stabilization wait: directly follows user configuration (tabSwitchIntervalMs) without artificial multipliers or 380ms floor
+        // Webview stabilization wait: strictly on TARGET tab (Copper puzzles) where fresh lots load
         val postSwitchSettleDelay = maxOf(40L, config.tabSwitchIntervalMs)
         delay(postSwitchSettleDelay)
 
