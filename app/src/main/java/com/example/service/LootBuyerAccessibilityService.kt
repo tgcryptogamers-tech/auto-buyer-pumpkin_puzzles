@@ -645,6 +645,28 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             }
         }
 
+        // PRE-CHECK: If the purchase confirmation modal ("Покупка" / "You will pay") is ALREADY open,
+        // do NOT switch tabs! Immediately finalize purchase by clicking "Buy"!
+        val preCheckBitmap = MediaProjectionHelper.getLatestScreenshot()
+        if (preCheckBitmap != null) {
+            try {
+                val preScaleX = screenWidth / preCheckBitmap.width
+                val preScaleY = screenHeight / preCheckBitmap.height
+                val preInput = InputImage.fromBitmap(preCheckBitmap, 0)
+                val preResult = Tasks.await(recognizer.process(preInput))
+                val preLines = preResult.textBlocks.flatMap { it.lines }
+                val db = AppDatabase.getDatabase(this@LootBuyerAccessibilityService)
+                if (confirmPurchaseDialogIfNeeded(preLines, preScaleX, preScaleY, screenWidth, screenHeight, config, db, preCheckBitmap)) {
+                    preCheckBitmap.recycle()
+                    return@withContext
+                }
+            } catch (e: Exception) {
+                // ignore pre-check error
+            } finally {
+                preCheckBitmap.recycle()
+            }
+        }
+
         // STEP 2: SWITCH STRICTLY BETWEEN THE RECOGNIZED GEMS
         AutoBuyerLogs.addLog("⚡ [ПЕРЕКЛЮЧЕНИЕ] Переход на '${getTabDisplayName(alternateTab)}' -> (${altCoords.first.toInt()}, ${altCoords.second.toInt()})")
         clickAtWithRandomization(altCoords.first, altCoords.second, config)
@@ -673,6 +695,10 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             val freshResult = Tasks.await(recognizer.process(freshInputImage))
             val freshLines = freshResult.textBlocks.flatMap { it.lines }
             val db = AppDatabase.getDatabase(this@LootBuyerAccessibilityService)
+            if (confirmPurchaseDialogIfNeeded(freshLines, scaleX, scaleY, screenWidth, screenHeight, config, db, freshBitmap)) {
+                freshBitmap.recycle()
+                return@withContext
+            }
             if (dismissSellOrUnwantedModalIfNeeded(freshLines, scaleX, scaleY, screenWidth, screenHeight)) {
                 freshBitmap.recycle()
                 return@withContext
@@ -906,157 +932,15 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                             AutoBuyerLogs.addLog("👉 [$clickStart] Кликаем по карточке лота в координатах ($clickX, $clickY) для открытия покупки...")
                             clickAtWithRandomization(clickX, clickY, config)
 
-                            // Wait for the confirmation dialog to open
-                            AutoBuyerLogs.addLog("⏳ [$clickStart] Ждем ${CONFIRMATION_DIALOG_DELAY_MS}мс пока откроется окно подтверждения покупки...")
-                            delay(CONFIRMATION_DIALOG_DELAY_MS)
-                            val endWait = System.currentTimeMillis()
-                            AutoBuyerLogs.addLog("⏱️ [$endWait] Ожидание завершено за ${endWait - clickStart}мс")
-
-                            // SPEEDUP OPTIMIZATION: Check if we have calibrated or cached coordinates for 'Buy' confirmation button
-                            val finalConfirmX = if (config.calibratedConfirmX != -1f) config.calibratedConfirmX else cachedBuyX
-                            val finalConfirmY = if (config.calibratedConfirmY != -1f) config.calibratedConfirmY else cachedBuyY
-                            if (finalConfirmX != null && finalConfirmY != null) {
-                                val logPrefix = if (config.calibratedConfirmX != -1f) "🎯 [КАЛИБРОВАННОЕ ПОДТВЕРЖДЕНИЕ]" else "⚡ [БЫСТРОЕ ПОДТВЕРЖДЕНИЕ]"
-                                AutoBuyerLogs.addLog("$logPrefix Нажимаем кнопку 'Confirm' в координатах ($finalConfirmX, $finalConfirmY) с рандомизацией")
-                                clickAtWithRandomization(finalConfirmX, finalConfirmY, config)
-
-                                // Save purchase record to database with actual verified item name
-                                try {
-                                    val purchaseMsg = formatPurchaseMessage(q, actualItemName, price)
-                                    val db = AppDatabase.getDatabase(this@LootBuyerAccessibilityService)
-                                    db.purchaseDao().insertPurchase(
-                                        PurchaseRecord(
-                                            timestamp = System.currentTimeMillis(),
-                                            itemName = actualItemName,
-                                            price = price,
-                                            quantity = q,
-                                            details = purchaseMsg
-                                        )
-                                    )
-                                    registerPurchaseSuccess()
-                                    AutoBuyerLogs.addLog("🎉 $purchaseMsg")
-                                } catch (e: Exception) {
-                                    AutoBuyerLogs.addLog("⚠️ Ошибка записи покупки: ${e.message}")
-                                }
-
-                                // Set temporary cooldown while we verify the purchase result
-                                cooldownUntilMillis = System.currentTimeMillis() + 15 * 1000L
-                                AutoBuyerLogs.addLog("👉 Нажали подтверждение покупки (быстрое). Ожидаем результат...")
-                                
-                                // Track purchase to check for stuck lot on next screen scan
-                                lastPurchasedPrice = price
-                                lastPurchasedQuantity = q
-                                lastPurchaseAttemptTime = System.currentTimeMillis()
-                                isStuckCheckPending = true
-                                
-                                verifyPurchaseResultAndHandleFailure(price, q, config)
-                                break
-                            }
-
-                            // First time discovery: Wait slightly longer to guarantee transition has finished and text is razor sharp
-                            AutoBuyerLogs.addLog("⏳ [ОБНАРУЖЕНИЕ КНОПКИ] Дополнительная задержка 250мс перед OCR...")
-                            delay(250)
-                            val ocrTime = System.currentTimeMillis()
-
-                            // Capture screen again to find the confirmation Buy button (fallback/discovery step)
-                            AutoBuyerLogs.addLog("📷 [$ocrTime] Захват экрана для поиска и сохранения координат кнопки 'Buy'...")
-                            val dialogBitmap = MediaProjectionHelper.getLatestScreenshot()
-                            if (dialogBitmap != null) {
-                                val dialogInputImage = InputImage.fromBitmap(dialogBitmap, 0)
-                                val dialogResult = try {
-                                    Tasks.await(recognizer.process(dialogInputImage))
-                                } catch (e: Exception) {
-                                    null
-                                }
-
-                                if (dialogResult != null) {
-                                    val dialogLines = dialogResult.textBlocks.flatMap { it.lines }
-                                    val dialogBuyLines = dialogLines.filter { line ->
-                                        isBuyConfirmationText(line.text)
-                                    }
-                                    var targetDialogBuyLine = dialogBuyLines.firstOrNull { line ->
-                                        val bounds = line.boundingBox
-                                        if (bounds != null) {
-                                            val cX = bounds.centerX() * scaleX
-                                            val cY = bounds.centerY() * scaleY
-                                            val cXPercent = cX / screenWidth
-                                            val cYPercent = cY / screenHeight
-                                            cXPercent in 0.3f..0.7f && cYPercent in 0.50f..0.85f
-                                        } else {
-                                            false
-                                        }
-                                    }
-
-                                    if (targetDialogBuyLine == null) {
-                                        AutoBuyerLogs.addLog("⚠️ [ОТКРЫТИЕ ОКНА] Текстовый поиск кнопки 'Buy/Confirm' не дал результатов. Применяем структурный поиск по координатам...")
-                                        val candidates = dialogLines.filter { line ->
-                                            val bounds = line.boundingBox
-                                            if (bounds != null) {
-                                                val cX = bounds.centerX() * scaleX
-                                                val cY = bounds.centerY() * scaleY
-                                                val cXPercent = cX / screenWidth
-                                                val cYPercent = cY / screenHeight
-                                                cXPercent in 0.25f..0.75f && cYPercent in 0.58f..0.82f
-                                            } else {
-                                                false
-                                            }
-                                        }
-                                        targetDialogBuyLine = candidates.maxByOrNull { line ->
-                                            line.boundingBox?.centerY() ?: 0
-                                        }
-                                        if (targetDialogBuyLine != null) {
-                                            AutoBuyerLogs.addLog("🎯 Нашли структурную кнопку внизу модального окна: '${targetDialogBuyLine.text}'")
-                                        }
-                                    }
-
-                                    if (targetDialogBuyLine != null) {
-                                        val dBounds = targetDialogBuyLine.boundingBox!!
-                                        val dClickX = dBounds.centerX() * scaleX
-                                        val dClickY = dBounds.centerY() * scaleY
-                                        
-                                        // Cache the found coordinates
-                                        cachedBuyX = dClickX
-                                        cachedBuyY = dClickY
-                                        
-                                        AutoBuyerLogs.addLog("🎉 [ПОДТВЕРЖДЕНИЕ] Нажимаем кнопку 'Buy' в окне подтверждения в координатах ($dClickX, $dClickY)")
-                                        clickAt(dClickX, dClickY)
-
-                                        // Save purchase record to database with actual verified item name
-                                        try {
-                                            val purchaseMsg = formatPurchaseMessage(q, actualItemName, price)
-                                            val db = AppDatabase.getDatabase(this@LootBuyerAccessibilityService)
-                                            db.purchaseDao().insertPurchase(
-                                                PurchaseRecord(
-                                                    timestamp = System.currentTimeMillis(),
-                                                    itemName = actualItemName,
-                                                    price = price,
-                                                    quantity = q,
-                                                    details = purchaseMsg
-                                                )
-                                            )
-                                            registerPurchaseSuccess()
-                                            AutoBuyerLogs.addLog("🎉 $purchaseMsg")
-                                        } catch (e: Exception) {
-                                            AutoBuyerLogs.addLog("⚠️ Ошибка записи покупки: ${e.message}")
-                                        }
-
-                                        // Set temporary cooldown while we verify the purchase result
-                                        cooldownUntilMillis = System.currentTimeMillis() + 15 * 1000L
-                                        AutoBuyerLogs.addLog("👉 Нажали подтверждение покупки (с OCR). Ожидаем результат...")
-                                        // Track purchase to check for stuck lot on next screen scan
-                                        lastPurchasedPrice = price
-                                        lastPurchasedQuantity = q
-                                        lastPurchaseAttemptTime = System.currentTimeMillis()
-                                        isStuckCheckPending = true
-                                        verifyPurchaseResultAndHandleFailure(price, q, config)
-                                    } else {
-                                        AutoBuyerLogs.addLog("⚠️ Окно подтверждения открылось, но кнопка 'Buy' не была найдена на экране.")
-                                    }
-                                }
-                                dialogBitmap.recycle()
-                            } else {
-                                AutoBuyerLogs.addLog("⚠️ Не удалось захватить экран для нажатия кнопки подтверждения покупки.")
-                            }
+                            executeBuyConfirmation(
+                                actualItemName = actualItemName,
+                                price = price,
+                                q = q,
+                                config = config,
+                                screenWidth = screenWidth,
+                                screenHeight = screenHeight,
+                                db = db
+                            )
 
                             // Break the row loop to avoid trying to buy other lots in the same scan frame
                             break
@@ -1133,36 +1017,16 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                                         val clickY = card.handshakeCenterY
                                         AutoBuyerLogs.addLog("👉 Кликаем по кнопке рукопожатия OpenCV в ($clickX, $clickY) для покупки...")
                                         clickAtWithRandomization(clickX, clickY, config)
-                                        delay(CONFIRMATION_DIALOG_DELAY_MS)
 
-                                        val finalConfirmX = if (config.calibratedConfirmX != -1f) config.calibratedConfirmX else cachedBuyX
-                                        val finalConfirmY = if (config.calibratedConfirmY != -1f) config.calibratedConfirmY else cachedBuyY
-                                        if (finalConfirmX != null && finalConfirmY != null) {
-                                            AutoBuyerLogs.addLog("⚡ [ПОДТВЕРЖДЕНИЕ] Нажимаем кнопку 'Buy' в координатах ($finalConfirmX, $finalConfirmY)")
-                                            clickAtWithRandomization(finalConfirmX, finalConfirmY, config)
-                                            try {
-                                                val purchaseMsg = formatPurchaseMessage(q, actualItemName, price)
-                                                db.purchaseDao().insertPurchase(
-                                                    PurchaseRecord(
-                                                        timestamp = System.currentTimeMillis(),
-                                                        itemName = actualItemName,
-                                                        price = price,
-                                                        quantity = q,
-                                                        details = purchaseMsg
-                                                    )
-                                                )
-                                                registerPurchaseSuccess()
-                                                AutoBuyerLogs.addLog("🎉 $purchaseMsg")
-                                            } catch (e: Exception) {
-                                                AutoBuyerLogs.addLog("⚠️ Ошибка записи покупки: ${e.message}")
-                                            }
-                                            cooldownUntilMillis = System.currentTimeMillis() + 15 * 1000L
-                                            lastPurchasedPrice = price
-                                            lastPurchasedQuantity = q
-                                            lastPurchaseAttemptTime = System.currentTimeMillis()
-                                            isStuckCheckPending = true
-                                            verifyPurchaseResultAndHandleFailure(price, q, config)
-                                        }
+                                        executeBuyConfirmation(
+                                            actualItemName = actualItemName,
+                                            price = price,
+                                            q = q,
+                                            config = config,
+                                            screenWidth = screenWidth,
+                                            screenHeight = screenHeight,
+                                            db = db
+                                        )
                                         break
                                     }
                                 }
@@ -1198,6 +1062,29 @@ class LootBuyerAccessibilityService : AccessibilityService() {
     private suspend fun performNativeViewScan(config: AppConfiguration) {
         val rootNode = rootInActiveWindow ?: return
         AutoBuyerLogs.addLog("Scanning active window view nodes...")
+
+        // Check if confirmation modal "Покупка" / "You will pay" is currently open in view tree
+        val modalConfirmNodes = rootNode.findAccessibilityNodeInfosByText("Покупка")
+            .ifEmpty { rootNode.findAccessibilityNodeInfosByText("You will pay") }
+        if (modalConfirmNodes.isNotEmpty()) {
+            modalConfirmNodes.forEach { it.recycle() }
+            val buyBtnNodes = rootNode.findAccessibilityNodeInfosByText("Buy")
+                .ifEmpty { rootNode.findAccessibilityNodeInfosByText("Купить") }
+            if (buyBtnNodes.isNotEmpty()) {
+                buyBtnNodes.first().performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                AutoBuyerLogs.addLog("🎯 [View Tree] Обнаружено окно 'Покупка'/'You will pay'! Кликаем кнопку 'Buy'!")
+                buyBtnNodes.forEach { it.recycle() }
+            } else {
+                val metrics = android.util.DisplayMetrics()
+                val wm = getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+                @Suppress("DEPRECATION")
+                wm.defaultDisplay.getRealMetrics(metrics)
+                clickAt(metrics.widthPixels * 0.50f, metrics.heightPixels * 0.746f)
+                AutoBuyerLogs.addLog("🎯 [View Tree] Обнаружено окно 'Покупка'! Кликаем по центру кнопки 'Buy'!")
+            }
+            rootNode.recycle()
+            return
+        }
         
         val foundNodes = rootNode.findAccessibilityNodeInfosByText(config.targetItemName)
         if (foundNodes.isNullOrEmpty()) {
@@ -1270,6 +1157,22 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                             node.getBoundsInScreen(rect)
                             clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
                             AutoBuyerLogs.addLog("👉 Клик по координатам лота: (${rect.centerX()}, ${rect.centerY()})")
+                        }
+
+                        // Also confirm the popup dialog
+                        delay(200)
+                        val confirmNodes = rootInActiveWindow?.findAccessibilityNodeInfosByText("Buy")
+                            ?: rootInActiveWindow?.findAccessibilityNodeInfosByText("Купить")
+                        if (!confirmNodes.isNullOrEmpty()) {
+                            confirmNodes.first().performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            AutoBuyerLogs.addLog("👉 Нажато подтверждение покупки 'Buy' в модальном окне через View Tree!")
+                            confirmNodes.forEach { it.recycle() }
+                        } else {
+                            val metrics = android.util.DisplayMetrics()
+                            val wm = getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+                            @Suppress("DEPRECATION")
+                            wm.defaultDisplay.getRealMetrics(metrics)
+                            clickAt(metrics.widthPixels * 0.50f, metrics.heightPixels * 0.746f)
                         }
                     } else {
                         AutoBuyerLogs.addLog("🎉 [МОНИТОРИНГ] Найдено соответствие! Цена: $priceValue. (Покупка пропущена - режим только логирования)")
@@ -1683,6 +1586,17 @@ class LootBuyerAccessibilityService : AccessibilityService() {
     private fun isBuyConfirmationText(text: String): Boolean {
         val t = text.lowercase()
         return t.contains("buy") || 
+               t.contains("3uy") ||
+               t.contains("13uy") ||
+               t.contains("buv") ||
+               t.contains("bvy") ||
+               t.contains("boy") ||
+               t.contains("soy") ||
+               t.contains("roy") ||
+               t.contains("doy") ||
+               t.contains("day") ||
+               t.contains("bov") ||
+               t.contains("bup") ||
                t.contains("купить") || 
                t.contains("выкупить") ||
                t.contains("kynutb") ||
@@ -1727,6 +1641,241 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                t.contains("confilrm") ||
                t.contains("coníirm") ||
                t.contains("conf")
+    }
+
+    /**
+     * Executes instant purchase confirmation when a lot is clicked.
+     * Uses cached coordinates, OpenCV vision, or geometric calculation of the modal's "Buy" button.
+     */
+    private suspend fun executeBuyConfirmation(
+        actualItemName: String,
+        price: Double,
+        q: Double,
+        config: AppConfiguration,
+        screenWidth: Float,
+        screenHeight: Float,
+        db: AppDatabase
+    ): Boolean {
+        val clickStart = System.currentTimeMillis()
+        AutoBuyerLogs.addLog("⏳ [$clickStart] Ожидаем появление модального окна подтверждения покупки ('Покупка'/'Buy')...")
+
+        // Wait minimal delay for Telegram webview modal popup transition
+        delay(CONFIRMATION_DIALOG_DELAY_MS)
+
+        var buyClickX: Float = screenWidth * 0.50f
+        var buyClickY: Float = screenHeight * 0.746f
+
+        if (cachedBuyX != null && cachedBuyY != null) {
+            buyClickX = cachedBuyX!!
+            buyClickY = cachedBuyY!!
+            AutoBuyerLogs.addLog("⚡ [МГНОВЕННОЕ ПОДТВЕРЖДЕНИЕ] Нажимаем кнопку 'Buy' в ($buyClickX, $buyClickY)")
+            clickAt(buyClickX, buyClickY)
+        } else {
+            val dialogBitmap = MediaProjectionHelper.getLatestScreenshot()
+            if (dialogBitmap != null) {
+                try {
+                    val openCvBtn = OpenCvVisionEngine.findConfirmationBuyButton(dialogBitmap, screenWidth, screenHeight)
+                    if (openCvBtn != null) {
+                        buyClickX = openCvBtn.first
+                        buyClickY = openCvBtn.second
+                        AutoBuyerLogs.addLog("👁️ [OpenCV] Найдена золотая кнопка 'Buy' в (${buyClickX.toInt()}, ${buyClickY.toInt()})")
+                    } else {
+                        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                        val dialogInput = InputImage.fromBitmap(dialogBitmap, 0)
+                        val dialogResult = Tasks.await(recognizer.process(dialogInput))
+                        val dLines = dialogResult.textBlocks.flatMap { it.lines }
+                        val targetLine = dLines.firstOrNull { line ->
+                            val b = line.boundingBox
+                            if (b != null) {
+                                val cX = b.centerX() * (screenWidth / dialogBitmap.width)
+                                val cY = b.centerY() * (screenHeight / dialogBitmap.height)
+                                val cXPercent = cX / screenWidth
+                                val cYPercent = cY / screenHeight
+                                cXPercent in 0.25f..0.75f && cYPercent in 0.68f..0.83f && isBuyConfirmationText(line.text)
+                            } else false
+                        }
+                        if (targetLine?.boundingBox != null) {
+                            val b = targetLine.boundingBox!!
+                            buyClickX = b.centerX() * (screenWidth / dialogBitmap.width)
+                            buyClickY = b.centerY() * (screenHeight / dialogBitmap.height)
+                            AutoBuyerLogs.addLog("🎯 [OCR] Найдена кнопка '${targetLine.text}' в (${buyClickX.toInt()}, ${buyClickY.toInt()})")
+                        } else {
+                            val payLine = dLines.firstOrNull { it.text.lowercase().contains("pay") || it.text.lowercase().contains("плат") }
+                            if (payLine?.boundingBox != null) {
+                                val payY = payLine.boundingBox!!.centerY() * (screenHeight / dialogBitmap.height)
+                                buyClickY = payY + screenHeight * 0.155f
+                                AutoBuyerLogs.addLog("📍 [ГЕОМЕТРИЯ] Кнопка 'Buy' рассчитана со смещением от 'You will pay' -> (${buyClickX.toInt()}, ${buyClickY.toInt()})")
+                            } else {
+                                AutoBuyerLogs.addLog("🎯 [ГЕОМЕТРИЯ] Используем точный геометрический центр кнопки 'Buy' -> (${buyClickX.toInt()}, ${buyClickY.toInt()})")
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    AutoBuyerLogs.addLog("⚠️ Ошибка распознавания окна подтверждения: ${e.message}")
+                } finally {
+                    dialogBitmap.recycle()
+                }
+            } else {
+                AutoBuyerLogs.addLog("🎯 [ГЕОМЕТРИЯ] Кликаем кнопку 'Buy' по центру модального окна -> (${buyClickX.toInt()}, ${buyClickY.toInt()})")
+            }
+
+            cachedBuyX = buyClickX
+            cachedBuyY = buyClickY
+
+            AutoBuyerLogs.addLog("🎉 [ПОДТВЕРЖДЕНИЕ] Нажимаем кнопку 'Buy' в окне покупки (${buyClickX.toInt()}, ${buyClickY.toInt()})")
+            clickAt(buyClickX, buyClickY)
+        }
+
+        // Webview touch double-tap insurance
+        delay(60L)
+        clickAt(buyClickX, buyClickY)
+
+        try {
+            val purchaseMsg = formatPurchaseMessage(q, actualItemName, price)
+            db.purchaseDao().insertPurchase(
+                PurchaseRecord(
+                    timestamp = System.currentTimeMillis(),
+                    itemName = actualItemName,
+                    price = price,
+                    quantity = q,
+                    details = purchaseMsg
+                )
+            )
+            registerPurchaseSuccess()
+            AutoBuyerLogs.addLog("🎉 $purchaseMsg")
+        } catch (e: Exception) {
+            AutoBuyerLogs.addLog("⚠️ Ошибка записи покупки: ${e.message}")
+        }
+
+        cooldownUntilMillis = System.currentTimeMillis() + 15 * 1000L
+        lastPurchasedPrice = price
+        lastPurchasedQuantity = q
+        lastPurchaseAttemptTime = System.currentTimeMillis()
+        isStuckCheckPending = true
+
+        verifyPurchaseResultAndHandleFailure(price, q, config)
+        return true
+    }
+
+    /**
+     * Checks if the purchase confirmation modal dialog ("Покупка" / "You will pay") is currently open on screen.
+     * If open, immediately clicks the "Buy" button to complete purchase.
+     */
+    private suspend fun confirmPurchaseDialogIfNeeded(
+        lines: List<com.google.mlkit.vision.text.Text.Line>,
+        scaleX: Float,
+        scaleY: Float,
+        screenWidth: Float,
+        screenHeight: Float,
+        config: AppConfiguration,
+        db: AppDatabase,
+        bitmap: Bitmap? = null
+    ): Boolean {
+        val fullText = lines.joinToString(" ") { it.text.lowercase() }
+
+        // Skip if failure or success dialogs are open
+        val isOtherDialog = (fullText.contains("already") && fullText.contains("purchased")) ||
+                            fullText.contains("been purchased") ||
+                            fullText.contains("уже куплен") ||
+                            (fullText.contains("market") && fullText.contains("offer")) ||
+                            fullText.contains("buy offer") ||
+                            fullText.contains("try through") ||
+                            fullText.contains("too fast")
+        if (isOtherDialog) return false
+
+        val isConfirmationDialog = fullText.contains("покупка") ||
+                                   fullText.contains("you will pay") ||
+                                   fullText.contains("vou will pay") ||
+                                   fullText.contains("you wil pay") ||
+                                   fullText.contains("вы заплатите") ||
+                                   fullText.contains("bы заплатите") ||
+                                   fullText.contains("вы заплатит") ||
+                                   (fullText.contains("pay") && fullText.contains("1400")) ||
+                                   lines.any { line ->
+                                       val b = line.boundingBox
+                                       if (b != null) {
+                                           val cYPercent = (b.centerY() * scaleY) / screenHeight
+                                           val t = line.text.lowercase()
+                                           cYPercent in 0.32f..0.65f && (t.contains("покупка") || t.contains("will pay") || t.contains("you will"))
+                                       } else false
+                                   }
+
+        if (!isConfirmationDialog) return false
+
+        AutoBuyerLogs.addLog("🎯 [ОКНО ПОКУПКИ ОБНАРУЖЕНО] На экране открыто модальное окно 'Покупка' ('You will pay')! Завершаем покупку кликом по 'Buy'...")
+
+        var buyX: Float = cachedBuyX ?: (screenWidth * 0.50f)
+        var buyY: Float = cachedBuyY ?: (screenHeight * 0.746f)
+
+        // 1. OpenCV golden button detector
+        if (bitmap != null) {
+            val cvBtn = OpenCvVisionEngine.findConfirmationBuyButton(bitmap, screenWidth, screenHeight)
+            if (cvBtn != null) {
+                buyX = cvBtn.first
+                buyY = cvBtn.second
+                AutoBuyerLogs.addLog("👁️ [OpenCV] Найдена кнопка 'Buy' в координатах (${buyX.toInt()}, ${buyY.toInt()})")
+            }
+        }
+
+        // 2. OCR detection if OpenCV didn't find it or no bitmap
+        if (cachedBuyX == null && bitmap == null) {
+            val targetLine = lines.firstOrNull { line ->
+                val b = line.boundingBox
+                if (b != null) {
+                    val cX = b.centerX() * scaleX
+                    val cY = b.centerY() * scaleY
+                    val cXPercent = cX / screenWidth
+                    val cYPercent = cY / screenHeight
+                    cXPercent in 0.25f..0.75f && cYPercent in 0.68f..0.83f && isBuyConfirmationText(line.text)
+                } else false
+            }
+            if (targetLine?.boundingBox != null) {
+                val b = targetLine.boundingBox!!
+                buyX = b.centerX() * scaleX
+                buyY = b.centerY() * scaleY
+                AutoBuyerLogs.addLog("🎯 [OCR] Найдена кнопка '${targetLine.text}' в (${buyX.toInt()}, ${buyY.toInt()})")
+            }
+        }
+
+        cachedBuyX = buyX
+        cachedBuyY = buyY
+
+        AutoBuyerLogs.addLog("⚡ [ПОКУПКА] Кликаем кнопку 'Buy' в координатах (${buyX.toInt()}, ${buyY.toInt()})")
+        clickAt(buyX, buyY)
+        delay(60L)
+        clickAt(buyX, buyY) // double-click insurance in webview
+
+        // Extract price from modal lines
+        var detectedPrice = 0.0
+        for (line in lines) {
+            val ep = extractPrice(line.text)
+            if (ep != null && ep > 0.0) {
+                detectedPrice = ep
+                break
+            }
+        }
+        val targetItem = config.selectedGems.split(",").firstOrNull { it.isNotBlank() } ?: config.targetItemName
+
+        try {
+            val purchaseMsg = formatPurchaseMessage(1.0, targetItem, detectedPrice)
+            db.purchaseDao().insertPurchase(
+                PurchaseRecord(
+                    timestamp = System.currentTimeMillis(),
+                    itemName = targetItem,
+                    price = detectedPrice,
+                    quantity = 1.0,
+                    details = purchaseMsg
+                )
+            )
+            registerPurchaseSuccess()
+            AutoBuyerLogs.addLog("🎉 $purchaseMsg")
+        } catch (e: Exception) {
+            AutoBuyerLogs.addLog("⚠️ Ошибка записи покупки: ${e.message}")
+        }
+
+        cooldownUntilMillis = System.currentTimeMillis() + 15 * 1000L
+        verifyPurchaseResultAndHandleFailure(detectedPrice, 1.0, config)
+        return true
     }
 
     private suspend fun dismissLotAlreadyPurchasedDialogIfNeeded(
