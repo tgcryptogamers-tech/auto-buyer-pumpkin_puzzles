@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "auto-buyer-arc"
+rootProject.name = "auto-buyer-pumpkin_puzzles"
 
 include(":app")

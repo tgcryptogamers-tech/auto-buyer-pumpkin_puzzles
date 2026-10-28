@@ -1,6 +1,6 @@
 {
-  "name": "auto-buyer-arc",
-  "description": "Smart game auto-buyer with floating overlay control, accessibility gestures, and view-tree scanning.",
+  "name": "auto-buyer-pumpkin_puzzles",
+  "description": "Smart game auto-buyer for pumpkin puzzles with floating overlay control, accessibility gestures, and view-tree scanning.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
