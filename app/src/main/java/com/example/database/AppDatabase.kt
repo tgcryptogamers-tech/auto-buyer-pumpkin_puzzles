@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [AppConfiguration::class, PurchaseRecord::class], version = 11, exportSchema = false)
+@Database(entities = [AppConfiguration::class, PurchaseRecord::class], version = 12, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun configurationDao(): ConfigurationDao
     abstract fun purchaseDao(): PurchaseDao

@@ -204,9 +204,9 @@ object OpenCvVisionEngine {
         val scaleX = screenWidth / fullBitmap.width.toFloat()
         val scaleY = screenHeight / fullBitmap.height.toFloat()
 
-        // Crop the horizontal tab strip (30% to 52% of image height)
-        val cropTop = (fullBitmap.height * 0.30f).toInt().coerceIn(0, fullBitmap.height - 1)
-        val cropBottom = (fullBitmap.height * 0.52f).toInt().coerceIn(cropTop + 1, fullBitmap.height)
+        // Crop the horizontal tab strip (24% to 42% of image height)
+        val cropTop = (fullBitmap.height * 0.24f).toInt().coerceIn(0, fullBitmap.height - 1)
+        val cropBottom = (fullBitmap.height * 0.42f).toInt().coerceIn(cropTop + 1, fullBitmap.height)
         val cropHeight = cropBottom - cropTop
         val cropLeft = 0
         val cropWidth = fullBitmap.width
@@ -258,13 +258,23 @@ object OpenCvVisionEngine {
                 return null
             }
 
-            // 1. Изумруд (Emerald) - Green color in tab bar
-            val emeraldMask = Mat()
-            Core.inRange(hsvMat, Scalar(35.0, 50.0, 45.0), Scalar(85.0, 255.0, 255.0), emeraldMask)
-            findBestCentroidForMask(emeraldMask)?.let { results["Emerald"] = it }
-            emeraldMask.release()
+            // Green active tab (Buy or Sell active state)
+            val greenMask = Mat()
+            Core.inRange(hsvMat, Scalar(35.0, 50.0, 45.0), Scalar(85.0, 255.0, 255.0), greenMask)
+            findBestCentroidForMask(greenMask)?.let { centroid ->
+                val xPercent = centroid.first / screenWidth
+                if (xPercent < 0.35f) {
+                    results["Buy"] = centroid
+                } else if (xPercent in 0.35f..0.65f) {
+                    results["Sell"] = centroid
+                } else {
+                    results["OnSale"] = centroid
+                }
+                results["Emerald"] = centroid
+            }
+            greenMask.release()
 
-            // 2. Рубин (Ruby) - Red color in tab bar
+            // Red color in tab bar (legacy)
             val rubyMask1 = Mat()
             val rubyMask2 = Mat()
             val rubyMaskCombined = Mat()
@@ -276,7 +286,7 @@ object OpenCvVisionEngine {
             rubyMask2.release()
             rubyMaskCombined.release()
 
-            // 3. Сапфир (Sapphire) - Blue color in tab bar
+            // Blue color in tab bar (legacy)
             val sapphireMask = Mat()
             Core.inRange(hsvMat, Scalar(90.0, 50.0, 45.0), Scalar(135.0, 255.0, 255.0), sapphireMask)
             findBestCentroidForMask(sapphireMask)?.let { results["Sapphire"] = it }
@@ -342,9 +352,10 @@ object OpenCvVisionEngine {
     )
 
     /**
-     * Finds active lot cards and handshake "deal/buy" buttons using OpenCV HSV segmentation.
-     * In the "Money Mining" Telegram Mini App, lot cards are polygonal containers with a prominent
-     * golden handshake icon in the horizontal center and a gold coin/price on the right.
+     * Finds active lot cards and buy buttons using OpenCV HSV segmentation.
+     * Supports both:
+     * 1. Pumpkin puzzle lot cards (elongated hexagonal containers with yellow/golden border spanning across screen).
+     * 2. Handshake icon lot cards.
      */
     fun findLotCards(
         fullBitmap: Bitmap,
@@ -357,9 +368,9 @@ object OpenCvVisionEngine {
         val scaleX = screenWidth / fullBitmap.width.toFloat()
         val scaleY = screenHeight / fullBitmap.height.toFloat()
 
-        // The market items area is between 46% and 89% of the screen height
-        val cropTop = (fullBitmap.height * 0.46f).toInt().coerceIn(0, fullBitmap.height - 1)
-        val cropBottom = (fullBitmap.height * 0.89f).toInt().coerceIn(cropTop + 1, fullBitmap.height)
+        // The market items area is between 38% and 86% of the screen height
+        val cropTop = (fullBitmap.height * 0.38f).toInt().coerceIn(0, fullBitmap.height - 1)
+        val cropBottom = (fullBitmap.height * 0.86f).toInt().coerceIn(cropTop + 1, fullBitmap.height)
         val cropHeight = cropBottom - cropTop
         val cropWidth = fullBitmap.width
 
@@ -381,11 +392,11 @@ object OpenCvVisionEngine {
             Imgproc.cvtColor(rgbaMat, rgbMat, Imgproc.COLOR_RGBA2RGB)
             Imgproc.cvtColor(rgbMat, hsvMat, Imgproc.COLOR_RGB2HSV)
 
-            // Golden handshake and price text color (Bright golden yellow)
-            // H: 16..36, S: 100..255, V: 120..255
-            Core.inRange(hsvMat, Scalar(16.0, 100.0, 120.0), Scalar(36.0, 255.0, 255.0), yellowMask)
+            // Golden frame / handshake and price text color (Bright golden yellow)
+            // H: 14..38, S: 80..255, V: 90..255
+            Core.inRange(hsvMat, Scalar(14.0, 80.0, 90.0), Scalar(38.0, 255.0, 255.0), yellowMask)
 
-            // Morphological close to join adjacent handshake contour regions
+            // Morphological close to join adjacent border contour regions
             val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, org.opencv.core.Size(5.0, 5.0))
             Imgproc.morphologyEx(yellowMask, yellowMask, Imgproc.MORPH_CLOSE, kernel)
             kernel.release()
@@ -400,35 +411,43 @@ object OpenCvVisionEngine {
                 val area = Imgproc.contourArea(contour)
                 val centerXPercent = (rect.x + rect.width / 2f) / cropWidth.toFloat()
 
-                // Handshake is centered horizontally (35% to 65% of screen width)
-                // Width is typically 35..250px, height 25..150px
-                if (centerXPercent in 0.35f..0.65f && rect.width >= 35 && rect.height >= 25 && area >= 120.0) {
-                    val globalHandshakeX = (rect.x + rect.width / 2f) * scaleX
-                    val globalHandshakeY = (cropTop + rect.y + rect.height / 2f) * scaleY
+                // Condition A: Pumpkin puzzle lot card with golden polygonal frame (spans >= 60% of width)
+                val isPumpkinCard = rect.width >= cropWidth * 0.60f && rect.height in 35..250 && area >= 150.0 && centerXPercent in 0.40f..0.60f
+                // Condition B: Golden Handshake icon in center of card (legacy format)
+                val isHandshake = centerXPercent in 0.35f..0.65f && rect.width in 30..250 && rect.height in 20..150 && area >= 100.0
 
-                    // Estimate lot card bounding box in full bitmap coordinates
-                    val cardLeft = ((rect.x + rect.width / 2f) - cropWidth * 0.46f).toInt().coerceAtLeast(0)
-                    val cardRight = ((rect.x + rect.width / 2f) + cropWidth * 0.46f).toInt().coerceAtMost(cropWidth)
-                    val cardTop = (cropTop + rect.y - rect.height * 0.9f).toInt().coerceAtLeast(0)
-                    val cardBottom = (cropTop + rect.y + rect.height * 1.9f).toInt().coerceAtMost(fullBitmap.height)
+                if (isPumpkinCard || isHandshake) {
+                    val globalCenterX = (rect.x + rect.width / 2f) * scaleX
+                    val globalCenterY = (cropTop + rect.y + rect.height / 2f) * scaleY
 
-                    // Price ROI is on the right side of the handshake, vertically below the coin
-                    val priceLeft = (rect.x + rect.width + 10).coerceAtMost(cropWidth - 10)
-                    val priceRight = (cardRight - 10).coerceAtLeast(priceLeft + 10).coerceAtMost(cropWidth)
-                    val priceTop = (cropTop + rect.y - 10).coerceAtLeast(0)
-                    val priceBottom = (cardBottom - 5).coerceAtLeast(priceTop + 10).coerceAtMost(fullBitmap.height)
+                    // Avoid duplicate cards with overlapping Y coordinates
+                    val isDuplicate = cards.any { Math.abs(it.handshakeCenterY - globalCenterY) < 35f * scaleY }
+                    if (!isDuplicate) {
+                        val cardLeft = if (isPumpkinCard) rect.x else ((rect.x + rect.width / 2f) - cropWidth * 0.46f).toInt().coerceAtLeast(0)
+                        val cardRight = if (isPumpkinCard) (rect.x + rect.width).coerceAtMost(cropWidth) else ((rect.x + rect.width / 2f) + cropWidth * 0.46f).toInt().coerceAtMost(cropWidth)
+                        val cardTop = (cropTop + rect.y).coerceAtLeast(0)
+                        val cardBottom = (cropTop + rect.y + rect.height).coerceAtMost(fullBitmap.height)
 
-                    cards.add(
-                        LotCardLocation(
-                            handshakeCenterX = globalHandshakeX,
-                            handshakeCenterY = globalHandshakeY,
-                            cardRect = Rect(cardLeft, cardTop, cardRight, cardBottom),
-                            priceCropRect = Rect(priceLeft, priceTop, priceRight, priceBottom)
+                        // Price ROI is on the right 40% of the lot card
+                        val priceLeft = (cardLeft + (cardRight - cardLeft) * 0.55f).toInt().coerceIn(0, cropWidth - 10)
+                        val priceRight = cardRight.coerceIn(priceLeft + 10, cropWidth)
+                        val priceTop = cardTop
+                        val priceBottom = cardBottom
+
+                        cards.add(
+                            LotCardLocation(
+                                handshakeCenterX = globalCenterX,
+                                handshakeCenterY = globalCenterY,
+                                cardRect = Rect(cardLeft, cardTop, cardRight, cardBottom),
+                                priceCropRect = Rect(priceLeft, priceTop, priceRight, priceBottom)
+                            )
                         )
-                    )
+                    }
                 }
                 contour.release()
             }
+            // Sort detected lot cards from top to bottom
+            cards.sortBy { it.handshakeCenterY }
         } catch (e: Exception) {
             AutoBuyerLogs.addLogBlocking("⚠️ [OpenCV] Ошибка анализа лот-карт: ${e.message}")
         } finally {

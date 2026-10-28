@@ -276,22 +276,22 @@ fun DashboardScreen(
                 .clip(RoundedCornerShape(16.dp))
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(Color(0xFF3F51B5), Color(0xFF1A237E))
+                        colors = listOf(Color(0xFFE65100), Color(0xFFBF360C))
                     )
                 )
                 .padding(20.dp)
         ) {
             Column {
                 Text(
-                    text = "LOT MONITOR & SCANNER",
+                    text = "🎃 PUMPKIN PUZZLE AUTO-BUYER",
                     color = Color.White,
-                    fontSize = 22.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 1.5.sp
+                    letterSpacing = 1.2.sp
                 )
                 Text(
-                    text = "Smart Game Auction Tracker & Logger",
-                    color = Color(0xFFD0BCFF),
+                    text = "Smart Pumpkin Sniper (Buy ⇄ Sell Bounce)",
+                    color = Color(0xFFFFCC80),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -497,24 +497,23 @@ fun DashboardScreen(
                         .padding(12.dp)
                 ) {
                     Text(
-                        text = "🎯 Выбор вкладок/товаров для скупки (мульти-выбор):",
+                        text = "🎯 Выбор вкладок/режима рынка для мониторинга:",
                         color = Color.White,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Бот будет циклически переключаться между выбранными вкладками (Copper puzzles / Silver puzzles) и скупать лоты",
+                        text = "Бот мониторит лоты во вкладке Buy и циклически сбрасывает рынок переключением на Sell и обратно",
                         color = Color.LightGray,
                         fontSize = 11.sp
                     )
                     Spacer(modifier = Modifier.height(10.dp))
 
                     val gemList = listOf(
-                        Triple("Copper puzzles", "🟤 Copper", Color(0xFFB87333)),
-                        Triple("Silver puzzles", "⚪ Silver", Color(0xFFC0C0C0)),
-                        Triple("Gold puzzles", "🟡 Gold", Color(0xFFFFD700)),
-                        Triple("Diamond puzzles", "💎 Diamond", Color(0xFF00E5FF)),
-                        Triple("Mine dwarves", "⛏️ Dwarves", Color(0xFFFF9800))
+                        Triple("Buy", "🛒 Buy (Скупка)", Color(0xFF4CAF50)),
+                        Triple("Sell", "💰 Sell (Сброс рынка)", Color(0xFFFF9800)),
+                        Triple("Pumpkin puzzle", "🎃 Любой пазл", Color(0xFFFF5722)),
+                        Triple("On Sale", "🏷️ On Sale", Color(0xFF9E9E9E))
                     )
 
                     Row(
@@ -576,9 +575,9 @@ fun DashboardScreen(
                     }
                 }
 
-                // Quick Predefined Russian game tabs
+                // Quick Predefined game tabs and pumpkin puzzle items
                 Column {
-                    Text("Quick Predefined Game Tabs:", color = Color.Gray, fontSize = 11.sp)
+                    Text("Быстрый выбор цели поиска (пазлы тыквы):", color = Color.Gray, fontSize = 11.sp)
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         modifier = Modifier
@@ -586,14 +585,34 @@ fun DashboardScreen(
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        val presetCategories = listOf("Copper puzzles", "Silver puzzles", "Gold puzzles", "Diamond puzzles", "Mine dwarves", "Изумруд", "Сапфир", "Рубин")
+                        val presetCategories = listOf(
+                            "Pumpkin puzzle",
+                            "Pumpkin puzzle №1",
+                            "Pumpkin puzzle №2",
+                            "Pumpkin puzzle №3",
+                            "Pumpkin puzzle №4",
+                            "Pumpkin puzzle №5",
+                            "Pumpkin puzzle №6",
+                            "Pumpkin puzzle №7",
+                            "Pumpkin puzzle №8",
+                            "Pumpkin puzzle №9",
+                            "Pumpkin puzzle №10",
+                            "Pumpkin puzzle №11",
+                            "Pumpkin puzzle №12",
+                            "Pumpkin puzzle №13",
+                            "Pumpkin puzzle №14",
+                            "Pumpkin puzzle №15",
+                            "Pumpkin puzzle №16",
+                            "Buy",
+                            "Sell"
+                        )
                         presetCategories.forEach { cat ->
                             val isSelected = itemNameInput.equals(cat, ignoreCase = true)
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) Color(0xFF3F51B5) else Color(0xFF2B2B33))
-                                    .border(1.dp, if (isSelected) Color(0xFFD0BCFF) else Color.Gray, RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) Color(0xFFE65100) else Color(0xFF2B2B33))
+                                    .border(1.dp, if (isSelected) Color(0xFFFFB74D) else Color.Gray, RoundedCornerShape(8.dp))
                                     .clickable {
                                         itemNameInput = cat
                                         saveConfig()
@@ -735,7 +754,11 @@ fun DashboardScreen(
                     )
                 }
 
-                if (config != null && (config!!.calibratedOreX != -1f || config!!.calibratedCopperX != -1f)) {
+                val hasCalibrated = config != null && (
+                    config!!.calibratedBuyX != -1f || config!!.calibratedOreX != -1f ||
+                    config!!.calibratedSellX != -1f || config!!.calibratedCopperX != -1f
+                )
+                if (hasCalibrated) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -744,15 +767,14 @@ fun DashboardScreen(
                             .padding(8.dp)
                     ) {
                         Text("Сохраненные координаты калибровки:", color = Color.Gray, fontSize = 11.sp)
-                        Text("• Ore: (${config!!.calibratedOreX.toInt()}, ${config!!.calibratedOreY.toInt()})", color = Color.LightGray, fontSize = 11.sp)
-                        Text("• Copper: (${config!!.calibratedCopperX.toInt()}, ${config!!.calibratedCopperY.toInt()})", color = Color.LightGray, fontSize = 11.sp)
-                        Text("• Silver: (${config!!.calibratedSilverX.toInt()}, ${config!!.calibratedSilverY.toInt()})", color = Color.LightGray, fontSize = 11.sp)
-                        Text("• Gold: (${config!!.calibratedGoldX.toInt()}, ${config!!.calibratedGoldY.toInt()})", color = Color.LightGray, fontSize = 11.sp)
-                        Text("• Sap: (${config!!.calibratedSapX.toInt()}, ${config!!.calibratedSapY.toInt()})", color = Color.LightGray, fontSize = 11.sp)
-                        Text("• Emerald: (${config!!.calibratedEmeraldX.toInt()}, ${config!!.calibratedEmeraldY.toInt()})", color = Color.LightGray, fontSize = 11.sp)
-                        Text("• Ruby: (${config!!.calibratedRubyX.toInt()}, ${config!!.calibratedRubyY.toInt()})", color = Color.LightGray, fontSize = 11.sp)
+                        val buyX = if (config!!.calibratedBuyX != -1f) config!!.calibratedBuyX else config!!.calibratedOreX
+                        val buyY = if (config!!.calibratedBuyY != -1f) config!!.calibratedBuyY else config!!.calibratedOreY
+                        val sellX = if (config!!.calibratedSellX != -1f) config!!.calibratedSellX else config!!.calibratedCopperX
+                        val sellY = if (config!!.calibratedSellY != -1f) config!!.calibratedSellY else config!!.calibratedCopperY
+                        Text("• Вкладка Buy (Покупка): (${buyX.toInt()}, ${buyY.toInt()})", color = Color(0xFF81C784), fontSize = 11.sp)
+                        Text("• Вкладка Sell (Сброс рынка): (${sellX.toInt()}, ${sellY.toInt()})", color = Color(0xFFFFB74D), fontSize = 11.sp)
                         if (config!!.calibratedConfirmX != -1f) {
-                            Text("• Confirm: (${config!!.calibratedConfirmX.toInt()}, ${config!!.calibratedConfirmY.toInt()})", color = Color.LightGray, fontSize = 11.sp)
+                            Text("• Confirm (Модалка Buy): (${config!!.calibratedConfirmX.toInt()}, ${config!!.calibratedConfirmY.toInt()})", color = Color(0xFF80DEEA), fontSize = 11.sp)
                         }
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(

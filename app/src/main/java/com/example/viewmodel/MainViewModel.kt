@@ -170,7 +170,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         emeraldX: Float = -1f, emeraldY: Float = -1f,
         rubyX: Float = -1f, rubyY: Float = -1f,
         confirmX: Float = -1f,
-        confirmY: Float = -1f
+        confirmY: Float = -1f,
+        buyX: Float = -1f,
+        buyY: Float = -1f,
+        sellX: Float = -1f,
+        sellY: Float = -1f
     ) {
         viewModelScope.launch {
             val current = dao.getConfiguration() ?: AppConfiguration()
@@ -190,7 +194,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 calibratedRubyX = rubyX,
                 calibratedRubyY = rubyY,
                 calibratedConfirmX = confirmX,
-                calibratedConfirmY = confirmY
+                calibratedConfirmY = confirmY,
+                calibratedBuyX = buyX,
+                calibratedBuyY = buyY,
+                calibratedSellX = sellX,
+                calibratedSellY = sellY
             ))
         }
     }

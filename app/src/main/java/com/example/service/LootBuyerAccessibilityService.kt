@@ -35,6 +35,10 @@ class LootBuyerAccessibilityService : AccessibilityService() {
     @Volatile var cooldownUntilMillis: Long = 0L
 
     // Caching coordinates to bypass initial OCR delays and speed up refresh loop & purchases
+    @Volatile private var cachedTabBuyX: Float? = null
+    @Volatile private var cachedTabBuyY: Float? = null
+    @Volatile private var cachedTabSellX: Float? = null
+    @Volatile private var cachedTabSellY: Float? = null
     @Volatile private var cachedTabOreX: Float? = null
     @Volatile private var cachedTabOreY: Float? = null
     @Volatile private var cachedTabCopperX: Float? = null
@@ -166,6 +170,10 @@ class LootBuyerAccessibilityService : AccessibilityService() {
         isRunning = true
         // Reset tab initialization on fresh start so tabs are recognized anew
         areTabsInitialized = false
+        cachedTabBuyX = null
+        cachedTabBuyY = null
+        cachedTabSellX = null
+        cachedTabSellY = null
         cachedTabCopperX = null
         cachedTabCopperY = null
         cachedTabSilverX = null
@@ -324,6 +332,7 @@ class LootBuyerAccessibilityService : AccessibilityService() {
         }
 
         val displayItem = when {
+            itemName.lowercase().contains("pumpkin") || itemName.lowercase().contains("пазл") || itemName.lowercase().contains("тыкв") -> itemName
             itemName.lowercase().contains("copper") || itemName.lowercase().contains("медь") || itemName.lowercase().contains("медн") -> "Copper puzzles (Медные пазлы)"
             itemName.lowercase().contains("silver") || itemName.lowercase().contains("серебр") -> "Silver puzzles (Серебряные пазлы)"
             itemName.lowercase().contains("gold") || itemName.lowercase().contains("золот") -> "Gold puzzles (Золотые пазлы)"
@@ -340,6 +349,10 @@ class LootBuyerAccessibilityService : AccessibilityService() {
     }
 
     private fun getTabDisplayName(tabName: String): String = when {
+        tabName.equals("Buy", ignoreCase = true) || tabName.contains("покуп", ignoreCase = true) -> "Buy (Покупка)"
+        tabName.equals("Sell", ignoreCase = true) || tabName.contains("продаж", ignoreCase = true) -> "Sell (Продажа)"
+        tabName.equals("On Sale", ignoreCase = true) || tabName.contains("onsale", ignoreCase = true) -> "On Sale (На продаже)"
+        tabName.contains("Pumpkin", ignoreCase = true) || tabName.contains("пазл", ignoreCase = true) || tabName.contains("тыкв", ignoreCase = true) -> "Pumpkin puzzle (Пазлы тыквы)"
         tabName.contains("Copper", ignoreCase = true) || tabName.contains("Медь", ignoreCase = true) || tabName.contains("Медн", ignoreCase = true) -> "Copper puzzles (Медные пазлы)"
         tabName.contains("Silver", ignoreCase = true) || tabName.contains("Серебр", ignoreCase = true) -> "Silver puzzles (Серебряные пазлы)"
         tabName.contains("Gold", ignoreCase = true) || tabName.contains("Золот", ignoreCase = true) -> "Gold puzzles (Золотые пазлы)"
@@ -362,8 +375,15 @@ class LootBuyerAccessibilityService : AccessibilityService() {
         config: AppConfiguration
     ): Pair<Float, Float> {
         val lower = tabName.lowercase().trim()
+        val effectiveBuyX = if (config.calibratedBuyX != -1f) config.calibratedBuyX else config.calibratedOreX
+        val effectiveBuyY = if (config.calibratedBuyY != -1f) config.calibratedBuyY else config.calibratedOreY
+        val effectiveSellX = if (config.calibratedSellX != -1f) config.calibratedSellX else config.calibratedCopperX
+        val effectiveSellY = if (config.calibratedSellY != -1f) config.calibratedSellY else config.calibratedCopperY
+
         // If we have calibrated coordinates, use them first!
         when {
+            lower.contains("buy") || lower.contains("покуп") -> if (effectiveBuyX != -1f && effectiveBuyY != -1f) return Pair(effectiveBuyX, effectiveBuyY)
+            lower.contains("sell") || lower.contains("продаж") -> if (effectiveSellX != -1f && effectiveSellY != -1f) return Pair(effectiveSellX, effectiveSellY)
             lower.contains("copper") || lower.contains("медь") || lower.contains("медн") -> if (config.calibratedCopperX != -1f && config.calibratedCopperY != -1f) return Pair(config.calibratedCopperX, config.calibratedCopperY)
             lower.contains("silver") || lower.contains("серебр") -> if (config.calibratedSilverX != -1f && config.calibratedSilverY != -1f) return Pair(config.calibratedSilverX, config.calibratedSilverY)
             lower.contains("gold") || lower.contains("золот") -> if (config.calibratedGoldX != -1f && config.calibratedGoldY != -1f) return Pair(config.calibratedGoldX, config.calibratedGoldY)
@@ -372,7 +392,7 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             lower.contains("sapphire") || lower.contains("sap") || lower.contains("сап") -> if (config.calibratedSapX != -1f && config.calibratedSapY != -1f) return Pair(config.calibratedSapX, config.calibratedSapY)
             lower.contains("emerald") || lower.contains("eme") || lower.contains("изум") -> if (config.calibratedEmeraldX != -1f && config.calibratedEmeraldY != -1f) return Pair(config.calibratedEmeraldX, config.calibratedEmeraldY)
             lower.contains("ruby") || lower.contains("rub") || lower.contains("руб") -> if (config.calibratedRubyX != -1f && config.calibratedRubyY != -1f) return Pair(config.calibratedRubyX, config.calibratedRubyY)
-            lower.contains("ore") || lower.contains("руда") -> if (config.calibratedOreX != -1f && config.calibratedOreY != -1f) return Pair(config.calibratedOreX, config.calibratedOreY)
+            lower.contains("ore") || lower.contains("руда") -> if (effectiveBuyX != -1f && effectiveBuyY != -1f) return Pair(effectiveBuyX, effectiveBuyY)
         }
 
         var tabBounds: Rect? = null
@@ -391,6 +411,8 @@ class LootBuyerAccessibilityService : AccessibilityService() {
 
         // Fallback to coordinate percentages for tabs
         val detectedTabY = filteredLines.firstOrNull { 
+            it.text.lowercase().contains("buy") ||
+            it.text.lowercase().contains("sell") ||
             it.text.lowercase().contains("copper") || 
             it.text.lowercase().contains("silver") ||
             it.text.lowercase().contains("gold") ||
@@ -399,8 +421,11 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             it.text.lowercase().contains("puzzle")
         }?.boundingBox?.centerY()?.toFloat()?.let { it * scaleY }
         
-        val tabY = detectedTabY ?: (screenHeight * 0.44f)
+        val tabY = detectedTabY ?: (screenHeight * 0.306f)
         val tabX = when {
+            lower.contains("buy") || lower.contains("покуп") -> screenWidth * 0.185f
+            lower.contains("sell") || lower.contains("продаж") -> screenWidth * 0.465f
+            lower.contains("on sale") || lower.contains("onsale") -> screenWidth * 0.780f
             lower.contains("copper") || lower.contains("медь") -> screenWidth * 0.10f
             lower.contains("silver") || lower.contains("серебр") -> screenWidth * 0.28f
             lower.contains("gold") || lower.contains("золот") -> screenWidth * 0.48f
@@ -409,16 +434,23 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             lower.contains("sapphire") || lower.contains("sap") -> screenWidth * 0.375f
             lower.contains("emerald") || lower.contains("eme") -> screenWidth * 0.625f
             lower.contains("ruby") || lower.contains("rub") -> screenWidth * 0.875f
-            lower.contains("ore") -> screenWidth * 0.06f
-            else -> screenWidth * 0.10f
+            lower.contains("ore") -> screenWidth * 0.185f
+            else -> screenWidth * 0.185f
         }
         return Pair(tabX, tabY)
     }
 
     private fun isTabCoordinateAvailable(tabName: String, config: AppConfiguration): Boolean {
         val lower = tabName.lowercase().trim()
+        val effectiveBuyX = if (config.calibratedBuyX != -1f) config.calibratedBuyX else config.calibratedOreX
+        val effectiveBuyY = if (config.calibratedBuyY != -1f) config.calibratedBuyY else config.calibratedOreY
+        val effectiveSellX = if (config.calibratedSellX != -1f) config.calibratedSellX else config.calibratedCopperX
+        val effectiveSellY = if (config.calibratedSellY != -1f) config.calibratedSellY else config.calibratedCopperY
+
         // Calibrated coordinates from DB
         when {
+            lower.contains("buy") || lower.contains("покуп") -> if (effectiveBuyX != -1f && effectiveBuyY != -1f) return true
+            lower.contains("sell") || lower.contains("продаж") -> if (effectiveSellX != -1f && effectiveSellY != -1f) return true
             lower.contains("copper") || lower.contains("медь") || lower.contains("медн") -> if (config.calibratedCopperX != -1f && config.calibratedCopperY != -1f) return true
             lower.contains("silver") || lower.contains("серебр") -> if (config.calibratedSilverX != -1f && config.calibratedSilverY != -1f) return true
             lower.contains("gold") || lower.contains("золот") -> if (config.calibratedGoldX != -1f && config.calibratedGoldY != -1f) return true
@@ -427,10 +459,12 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             lower.contains("sapphire") || lower.contains("sap") || lower.contains("сап") -> if (config.calibratedSapX != -1f && config.calibratedSapY != -1f) return true
             lower.contains("emerald") || lower.contains("eme") || lower.contains("изум") -> if (config.calibratedEmeraldX != -1f && config.calibratedEmeraldY != -1f) return true
             lower.contains("ruby") || lower.contains("rub") || lower.contains("руб") -> if (config.calibratedRubyX != -1f && config.calibratedRubyY != -1f) return true
-            lower.contains("ore") || lower.contains("руда") -> if (config.calibratedOreX != -1f && config.calibratedOreY != -1f) return true
+            lower.contains("ore") || lower.contains("руда") -> if (effectiveBuyX != -1f && effectiveBuyY != -1f) return true
         }
         // Cached coordinates from memory (validated)
         when {
+            lower.contains("buy") || lower.contains("покуп") -> return cachedTabBuyX != null && cachedTabBuyY != null
+            lower.contains("sell") || lower.contains("продаж") -> return cachedTabSellX != null && cachedTabSellY != null
             lower.contains("copper") || lower.contains("медь") || lower.contains("медн") -> return cachedTabCopperX != null && cachedTabCopperY != null
             lower.contains("silver") || lower.contains("серебр") -> return cachedTabSilverX != null && cachedTabSilverY != null
             lower.contains("gold") || lower.contains("золот") -> return cachedTabGoldX != null && cachedTabGoldY != null
@@ -439,15 +473,22 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             lower.contains("sapphire") || lower.contains("sap") || lower.contains("сап") -> return cachedTabSapX != null && cachedTabSapY != null
             lower.contains("emerald") || lower.contains("eme") || lower.contains("изум") -> return cachedTabEmeraldX != null && cachedTabEmeraldY != null
             lower.contains("ruby") || lower.contains("rub") || lower.contains("руб") -> return cachedTabRubyX != null && cachedTabRubyY != null
-            lower.contains("ore") || lower.contains("руда") -> return cachedTabOreX != null && cachedTabOreY != null
+            lower.contains("ore") || lower.contains("руда") -> return cachedTabBuyX != null && cachedTabBuyY != null || cachedTabOreX != null && cachedTabOreY != null
         }
         return false
     }
 
     private fun getTabCoordinatesCached(tabName: String, config: AppConfiguration, screenWidth: Float, screenHeight: Float): Pair<Float, Float>? {
         val lower = tabName.lowercase().trim()
+        val effectiveBuyX = if (config.calibratedBuyX != -1f) config.calibratedBuyX else config.calibratedOreX
+        val effectiveBuyY = if (config.calibratedBuyY != -1f) config.calibratedBuyY else config.calibratedOreY
+        val effectiveSellX = if (config.calibratedSellX != -1f) config.calibratedSellX else config.calibratedCopperX
+        val effectiveSellY = if (config.calibratedSellY != -1f) config.calibratedSellY else config.calibratedCopperY
+
         // Calibrated coordinates from DB
         when {
+            lower.contains("buy") || lower.contains("покуп") -> if (effectiveBuyX != -1f && effectiveBuyY != -1f) return Pair(effectiveBuyX, effectiveBuyY)
+            lower.contains("sell") || lower.contains("продаж") -> if (effectiveSellX != -1f && effectiveSellY != -1f) return Pair(effectiveSellX, effectiveSellY)
             lower.contains("copper") || lower.contains("медь") || lower.contains("медн") -> if (config.calibratedCopperX != -1f && config.calibratedCopperY != -1f) return Pair(config.calibratedCopperX, config.calibratedCopperY)
             lower.contains("silver") || lower.contains("серебр") -> if (config.calibratedSilverX != -1f && config.calibratedSilverY != -1f) return Pair(config.calibratedSilverX, config.calibratedSilverY)
             lower.contains("gold") || lower.contains("золот") -> if (config.calibratedGoldX != -1f && config.calibratedGoldY != -1f) return Pair(config.calibratedGoldX, config.calibratedGoldY)
@@ -456,10 +497,12 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             lower.contains("sapphire") || lower.contains("sap") || lower.contains("сап") -> if (config.calibratedSapX != -1f && config.calibratedSapY != -1f) return Pair(config.calibratedSapX, config.calibratedSapY)
             lower.contains("emerald") || lower.contains("eme") || lower.contains("изум") -> if (config.calibratedEmeraldX != -1f && config.calibratedEmeraldY != -1f) return Pair(config.calibratedEmeraldX, config.calibratedEmeraldY)
             lower.contains("ruby") || lower.contains("rub") || lower.contains("руб") -> if (config.calibratedRubyX != -1f && config.calibratedRubyY != -1f) return Pair(config.calibratedRubyX, config.calibratedRubyY)
-            lower.contains("ore") || lower.contains("руда") -> if (config.calibratedOreX != -1f && config.calibratedOreY != -1f) return Pair(config.calibratedOreX, config.calibratedOreY)
+            lower.contains("ore") || lower.contains("руда") -> if (effectiveBuyX != -1f && effectiveBuyY != -1f) return Pair(effectiveBuyX, effectiveBuyY)
         }
         // Exact OCR-recognized coordinates saved in session
         when {
+            lower.contains("buy") || lower.contains("покуп") -> if (cachedTabBuyX != null && cachedTabBuyY != null) return Pair(cachedTabBuyX!!, cachedTabBuyY!!)
+            lower.contains("sell") || lower.contains("продаж") -> if (cachedTabSellX != null && cachedTabSellY != null) return Pair(cachedTabSellX!!, cachedTabSellY!!)
             lower.contains("copper") || lower.contains("медь") || lower.contains("медн") -> if (cachedTabCopperX != null && cachedTabCopperY != null) return Pair(cachedTabCopperX!!, cachedTabCopperY!!)
             lower.contains("silver") || lower.contains("серебр") -> if (cachedTabSilverX != null && cachedTabSilverY != null) return Pair(cachedTabSilverX!!, cachedTabSilverY!!)
             lower.contains("gold") || lower.contains("золот") -> if (cachedTabGoldX != null && cachedTabGoldY != null) return Pair(cachedTabGoldX!!, cachedTabGoldY!!)
@@ -468,7 +511,7 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             lower.contains("sapphire") || lower.contains("sap") || lower.contains("сап") -> if (cachedTabSapX != null && cachedTabSapY != null) return Pair(cachedTabSapX!!, cachedTabSapY!!)
             lower.contains("emerald") || lower.contains("eme") || lower.contains("изум") -> if (cachedTabEmeraldX != null && cachedTabEmeraldY != null) return Pair(cachedTabEmeraldX!!, cachedTabEmeraldY!!)
             lower.contains("ruby") || lower.contains("rub") || lower.contains("руб") -> if (cachedTabRubyX != null && cachedTabRubyY != null) return Pair(cachedTabRubyX!!, cachedTabRubyY!!)
-            lower.contains("ore") || lower.contains("руда") -> if (cachedTabOreX != null && cachedTabOreY != null) return Pair(cachedTabOreX!!, cachedTabOreY!!)
+            lower.contains("ore") || lower.contains("руда") -> if (cachedTabBuyX != null && cachedTabBuyY != null) return Pair(cachedTabBuyX!!, cachedTabBuyY!!) else if (cachedTabOreX != null && cachedTabOreY != null) return Pair(cachedTabOreX!!, cachedTabOreY!!)
         }
         
         return null
@@ -493,12 +536,22 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             val tYPercent = tY / screenHeight
             val tXPercent = tX / screenWidth
 
-            // Market category tabs are strictly located in the horizontal strip (32%..52% of screen height)
-            if (tYPercent !in 0.30f..0.54f) {
+            // Market category tabs are strictly located in the horizontal strip (22%..54% of screen height)
+            if (tYPercent !in 0.22f..0.54f) {
                 return
             }
 
-            if (text.contains("copper") || text.contains("copp") || text.contains("медь") || text.contains("meдь") || text.contains("медн") || (text.contains("puzzle") && tXPercent < 0.20f)) {
+            if (text.contains("buy") || text.contains("покуп") || (text == "uy" && tXPercent < 0.35f)) {
+                cachedTabBuyX = tX
+                cachedTabBuyY = tY
+                cachedTabOreX = tX
+                cachedTabOreY = tY
+            } else if (text.contains("sell") || text.contains("продаж") || (text.contains("ell") && tXPercent in 0.35f..0.65f)) {
+                cachedTabSellX = tX
+                cachedTabSellY = tY
+                cachedTabCopperX = tX
+                cachedTabCopperY = tY
+            } else if (text.contains("copper") || text.contains("copp") || text.contains("медь") || text.contains("meдь") || text.contains("медн") || (text.contains("puzzle") && tXPercent < 0.20f)) {
                 cachedTabCopperX = tX
                 cachedTabCopperY = tY
             } else if (text.contains("silver") || text.contains("silv") || text.contains("серебро") || text.contains("cepeбpo") || text.contains("серебр") || (text.contains("puzzle") && tXPercent in 0.20f..0.40f)) {
@@ -553,8 +606,12 @@ class LootBuyerAccessibilityService : AccessibilityService() {
         val screenHeight = metrics.heightPixels.toFloat()
         val density = metrics.density
 
-        // Target tab is determined strictly by the target item configured by user (e.g. "Copper puzzles")
+        // Target tab is determined strictly by the target item configured by user (e.g. "Buy" or "Pumpkin puzzle")
         val targetFromConfig = when {
+            config.targetItemName.contains("buy", ignoreCase = true) || config.targetItemName.contains("покуп", ignoreCase = true) -> "Buy"
+            config.targetItemName.contains("sell", ignoreCase = true) || config.targetItemName.contains("продаж", ignoreCase = true) -> "Sell"
+            config.targetItemName.contains("pumpkin", ignoreCase = true) || config.targetItemName.contains("пазл", ignoreCase = true) || config.targetItemName.contains("тыкв", ignoreCase = true) -> "Buy"
+            config.targetItemName.contains("ore", ignoreCase = true) || config.targetItemName.contains("руда", ignoreCase = true) -> "Buy"
             config.targetItemName.contains("copper", ignoreCase = true) || config.targetItemName.contains("медь", ignoreCase = true) || config.targetItemName.contains("медн", ignoreCase = true) -> "Copper puzzles"
             config.targetItemName.contains("silver", ignoreCase = true) || config.targetItemName.contains("серебр", ignoreCase = true) -> "Silver puzzles"
             config.targetItemName.contains("gold", ignoreCase = true) || config.targetItemName.contains("золот", ignoreCase = true) -> "Gold puzzles"
@@ -563,23 +620,28 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             config.targetItemName.contains("emerald", ignoreCase = true) || config.targetItemName.contains("изум", ignoreCase = true) -> "Изумруд"
             config.targetItemName.contains("ruby", ignoreCase = true) || config.targetItemName.contains("руб", ignoreCase = true) -> "Рубин"
             config.targetItemName.contains("sapphire", ignoreCase = true) || config.targetItemName.contains("сап", ignoreCase = true) -> "Сапфир"
-            config.targetItemName.contains("ore", ignoreCase = true) || config.targetItemName.contains("руда", ignoreCase = true) -> "Руда"
             else -> null
         }
 
         val targetCategoryTab = targetFromConfig ?: run {
             val gems = config.selectedGems.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-            gems.firstOrNull() ?: "Copper puzzles"
+            gems.firstOrNull { it.equals("Buy", ignoreCase = true) || it.contains("покуп", ignoreCase = true) }
+                ?: gems.firstOrNull() ?: "Buy"
         }
 
         // The alternate tab is used ONLY as a dummy tab to trigger a market refresh and bounce immediately back
         val alternateTab = when {
+            targetCategoryTab.equals("Buy", ignoreCase = true) -> {
+                val other = config.selectedGems.split(",").map { it.trim() }.firstOrNull { it.equals("Sell", ignoreCase = true) || it.contains("продаж", ignoreCase = true) }
+                other ?: "Sell"
+            }
+            targetCategoryTab.equals("Sell", ignoreCase = true) -> "Buy"
             targetCategoryTab.contains("Copper", ignoreCase = true) -> {
                 val other = config.selectedGems.split(",").map { it.trim() }.firstOrNull { !it.contains("Copper", ignoreCase = true) && it.isNotEmpty() }
                 other ?: "Silver puzzles"
             }
             targetCategoryTab.contains("Silver", ignoreCase = true) -> "Copper puzzles"
-            else -> "Silver puzzles"
+            else -> "Sell"
         }
 
         // STEP 1: VERIFY OR DISCOVER TABS VIA OPENCV COMPUTER VISION & OCR
@@ -599,6 +661,18 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             // 1. Primary: OpenCV HSV chromatic & contour vision engine
             try {
                 val visionTabs = OpenCvVisionEngine.findTabPositionsByVision(initialBitmap, screenWidth, screenHeight)
+                visionTabs["Buy"]?.let { (x, y) ->
+                    cachedTabBuyX = x
+                    cachedTabBuyY = y
+                    cachedTabOreX = x
+                    cachedTabOreY = y
+                }
+                visionTabs["Sell"]?.let { (x, y) ->
+                    cachedTabSellX = x
+                    cachedTabSellY = y
+                    cachedTabCopperX = x
+                    cachedTabCopperY = y
+                }
                 visionTabs["Emerald"]?.let { (x, y) ->
                     cachedTabEmeraldX = x
                     cachedTabEmeraldY = y
@@ -764,9 +838,9 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                 AutoBuyerLogs.addLog("👁️ [OpenCV] Обнаружено ${visionLotCards.size} карточек лотов (рукопожатий) на экране.")
             }
 
-            // Parse and Group listings strictly from the market items area (46% to 90% of screen height)
-            val listingsTopLimit = freshBitmap.height * 0.46f
-            val listingsBottomLimit = freshBitmap.height * 0.90f
+            // Parse and Group listings strictly from the market items area (38% to 86% of screen height)
+            val listingsTopLimit = freshBitmap.height * 0.38f
+            val listingsBottomLimit = freshBitmap.height * 0.86f
             
             val listingLines = freshFilteredLines.filter { line ->
                 val bounds = line.boundingBox ?: return@filter false
@@ -777,10 +851,15 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                 // Exclude pure headers and system labels that don't have price numbers
                 val isPureHeaderLabel = (lineText.contains("showed") || lineText.contains("from") ||
                         lineText.contains("resource") || lineText.contains("market") ||
-                        lineText.contains("dwarf") || (lineText.contains("low") && !line.text.any { it.isDigit() })) && extracted == null
+                        lineText.contains("halloween") || lineText.contains("price (low)") ||
+                        lineText.contains("quantity") || lineText.contains("storage") ||
+                        lineText.contains("mine") || lineText.contains("tasks") ||
+                        lineText.contains("dwarf") || (lineText.contains("low") && !line.text.any { it.isDigit() })) && extracted == null &&
+                        !lineText.contains("pumpkin") && !lineText.contains("puzzle")
                 
                 centerY in listingsTopLimit..listingsBottomLimit && !isPureHeaderLabel &&
-                        (extracted != null || line.text.any { it.isDigit() || it in listOf('o', 'O', 'I', 'l', 's', 'S', 'B', 'D', 'd', 'Q') })
+                        (extracted != null || line.text.any { it.isDigit() || it in listOf('o', 'O', 'I', 'l', 's', 'S', 'B', 'D', 'd', 'Q') } ||
+                         lineText.contains("pumpkin") || lineText.contains("puzzle") || lineText.contains("№"))
             }
 
             // Group lines into rows by vertical alignment (within 65 pixels)
@@ -917,24 +996,49 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                         val top = row.mapNotNull { it.boundingBox?.top }.minOrNull() ?: 0
                         val bottom = row.mapNotNull { it.boundingBox?.bottom }.maxOrNull() ?: 0
 
-                        val actualItemName = when {
-                            targetCategoryTab.contains("copper", ignoreCase = true) || targetCategoryTab.contains("медь", ignoreCase = true) || targetCategoryTab.contains("медн", ignoreCase = true) -> "Copper puzzles"
-                            targetCategoryTab.contains("silver", ignoreCase = true) || targetCategoryTab.contains("серебр", ignoreCase = true) -> "Silver puzzles"
-                            targetCategoryTab.contains("gold", ignoreCase = true) || targetCategoryTab.contains("золот", ignoreCase = true) -> "Gold puzzles"
-                            targetCategoryTab.contains("diamond", ignoreCase = true) || targetCategoryTab.contains("алмаз", ignoreCase = true) -> "Diamond puzzles"
-                            targetCategoryTab.contains("dwarves", ignoreCase = true) || targetCategoryTab.contains("гном", ignoreCase = true) -> "Mine dwarves"
-                            targetCategoryTab.contains("emerald", ignoreCase = true) || targetCategoryTab.contains("изум", ignoreCase = true) -> "Изумруд"
-                            targetCategoryTab.contains("ruby", ignoreCase = true) || targetCategoryTab.contains("руб", ignoreCase = true) -> "Рубин"
-                            targetCategoryTab.contains("sapphire", ignoreCase = true) || targetCategoryTab.contains("сап", ignoreCase = true) -> "Сапфир"
-                            targetCategoryTab.contains("ore", ignoreCase = true) || targetCategoryTab.contains("руда", ignoreCase = true) -> "Руда"
-                            else -> targetCategoryTab
+                        val rowCombinedText = row.joinToString(" ") { it.text }
+                        val puzzleNumberMatch = Regex("[№#Nno.]*\\s*(\\d+)", RegexOption.IGNORE_CASE).find(rowCombinedText)
+                        val detectedPuzzleNum = puzzleNumberMatch?.groupValues?.get(1)
+
+                        val actualItemName = if (rowCombinedText.contains("pumpkin", ignoreCase = true) || rowCombinedText.contains("пазл", ignoreCase = true) || config.targetItemName.contains("pumpkin", ignoreCase = true) || config.targetItemName.contains("пазл", ignoreCase = true) || targetCategoryTab.equals("Buy", ignoreCase = true)) {
+                            if (detectedPuzzleNum != null) {
+                                "Pumpkin puzzle №$detectedPuzzleNum"
+                            } else {
+                                "Pumpkin puzzle"
+                            }
+                        } else {
+                            when {
+                                targetCategoryTab.contains("copper", ignoreCase = true) || targetCategoryTab.contains("медь", ignoreCase = true) || targetCategoryTab.contains("медн", ignoreCase = true) -> "Copper puzzles"
+                                targetCategoryTab.contains("silver", ignoreCase = true) || targetCategoryTab.contains("серебр", ignoreCase = true) -> "Silver puzzles"
+                                targetCategoryTab.contains("gold", ignoreCase = true) || targetCategoryTab.contains("золот", ignoreCase = true) -> "Gold puzzles"
+                                targetCategoryTab.contains("diamond", ignoreCase = true) || targetCategoryTab.contains("алмаз", ignoreCase = true) -> "Diamond puzzles"
+                                targetCategoryTab.contains("dwarves", ignoreCase = true) || targetCategoryTab.contains("гном", ignoreCase = true) -> "Mine dwarves"
+                                targetCategoryTab.contains("emerald", ignoreCase = true) || targetCategoryTab.contains("изум", ignoreCase = true) -> "Изумруд"
+                                targetCategoryTab.contains("ruby", ignoreCase = true) || targetCategoryTab.contains("руб", ignoreCase = true) -> "Рубин"
+                                targetCategoryTab.contains("sapphire", ignoreCase = true) || targetCategoryTab.contains("сап", ignoreCase = true) -> "Сапфир"
+                                targetCategoryTab.contains("ore", ignoreCase = true) || targetCategoryTab.contains("руда", ignoreCase = true) -> "Руда"
+                                else -> targetCategoryTab
+                            }
+                        }
+
+                        // Check if specific puzzle number requested in config
+                        val targetConfigLower = config.targetItemName.lowercase().trim()
+                        val specificNumberInConfig = Regex("\\b(\\d+)\\b").find(targetConfigLower)?.groupValues?.get(1)
+                        val itemFilterMatches = when {
+                            specificNumberInConfig != null && detectedPuzzleNum != null -> specificNumberInConfig == detectedPuzzleNum
+                            else -> true
+                        }
+
+                        if (!itemFilterMatches) {
+                            AutoBuyerLogs.addLog("⏭️ [ПРОПУСК] Найден лот '$actualItemName', но в настройках указан номер №$specificNumberInConfig.")
+                            continue
                         }
 
                         if (config.enableActualBuying) {
-                            // Click directly on the center / handshake icon of the lot card
+                            // Click directly on the center of the lot card (golden frame container)
                             val lotCenterY = ((top + bottom) / 2f) * scaleY
                             val clickX = (screenWidth * 0.50f).coerceIn(screenWidth * 0.35f, screenWidth * 0.75f)
-                            val clickY = lotCenterY.coerceIn(screenHeight * 0.51f, screenHeight * 0.87f)
+                            val clickY = lotCenterY.coerceIn(screenHeight * 0.40f, screenHeight * 0.85f)
 
                             val clickStart = System.currentTimeMillis()
                             AutoBuyerLogs.addLog("👉 [$clickStart] Кликаем по карточке лота в координатах ($clickX, $clickY) для открытия покупки...")
@@ -1012,18 +1116,22 @@ class LootBuyerAccessibilityService : AccessibilityService() {
                                     AutoBuyerLogs.addLog("Lot $foundLotsCount (OpenCV ROI) - Цена $price ($decisionText)")
 
                                     if (matchesThreshold && config.enableActualBuying) {
-                                        val actualItemName = when {
-                                            targetCategoryTab.contains("copper", ignoreCase = true) || targetCategoryTab.contains("медь", ignoreCase = true) || targetCategoryTab.contains("медн", ignoreCase = true) -> "Copper puzzles"
-                                            targetCategoryTab.contains("silver", ignoreCase = true) || targetCategoryTab.contains("серебр", ignoreCase = true) -> "Silver puzzles"
-                                            targetCategoryTab.contains("gold", ignoreCase = true) || targetCategoryTab.contains("золот", ignoreCase = true) -> "Gold puzzles"
-                                            targetCategoryTab.contains("diamond", ignoreCase = true) || targetCategoryTab.contains("алмаз", ignoreCase = true) -> "Diamond puzzles"
-                                            targetCategoryTab.contains("dwarves", ignoreCase = true) || targetCategoryTab.contains("гном", ignoreCase = true) -> "Mine dwarves"
-                                            else -> targetCategoryTab
+                                        val actualItemName = if (config.targetItemName.contains("pumpkin", ignoreCase = true) || config.targetItemName.contains("пазл", ignoreCase = true) || targetCategoryTab.equals("Buy", ignoreCase = true)) {
+                                            "Pumpkin puzzle"
+                                        } else {
+                                            when {
+                                                targetCategoryTab.contains("copper", ignoreCase = true) || targetCategoryTab.contains("медь", ignoreCase = true) || targetCategoryTab.contains("медн", ignoreCase = true) -> "Copper puzzles"
+                                                targetCategoryTab.contains("silver", ignoreCase = true) || targetCategoryTab.contains("серебр", ignoreCase = true) -> "Silver puzzles"
+                                                targetCategoryTab.contains("gold", ignoreCase = true) || targetCategoryTab.contains("золот", ignoreCase = true) -> "Gold puzzles"
+                                                targetCategoryTab.contains("diamond", ignoreCase = true) || targetCategoryTab.contains("алмаз", ignoreCase = true) -> "Diamond puzzles"
+                                                targetCategoryTab.contains("dwarves", ignoreCase = true) || targetCategoryTab.contains("гном", ignoreCase = true) -> "Mine dwarves"
+                                                else -> targetCategoryTab
+                                            }
                                         }
 
                                         val clickX = card.handshakeCenterX
                                         val clickY = card.handshakeCenterY
-                                        AutoBuyerLogs.addLog("👉 Кликаем по кнопке рукопожатия OpenCV в ($clickX, $clickY) для покупки...")
+                                        AutoBuyerLogs.addLog("👉 Кликаем по карточке лота OpenCV в ($clickX, $clickY) для покупки...")
                                         clickAtWithRandomization(clickX, clickY, config)
 
                                         executeBuyConfirmation(

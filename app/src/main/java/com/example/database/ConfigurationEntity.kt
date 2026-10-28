@@ -6,7 +6,7 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "app_configuration")
 data class AppConfiguration(
     @PrimaryKey val id: Int = 1,
-    val targetItemName: String = "Copper puzzles",
+    val targetItemName: String = "Pumpkin puzzle",
     val priceThreshold: Double = 100.0,
     val isLessThanOperator: Boolean = true, // True: buy if price < threshold. False: buy if price > threshold.
     val scanIntervalMs: Long = 350,
@@ -21,11 +21,15 @@ data class AppConfiguration(
     val refreshButtonY: Float = 200f,
     
     val autoBuyEnabled: Boolean = false,
-    val selectedGems: String = "Copper puzzles,Silver puzzles", // Comma-separated active gems/tabs for multi-purchase
+    val selectedGems: String = "Buy,Sell", // Comma-separated active tabs for market refresh (Buy target, Sell alternate)
     val tabSwitchIntervalMs: Long = 150L, // Configurable interval in ms for alternating tabs
     val enableActualBuying: Boolean = false, // If true, make actual clicks to purchase. If false, log only.
     val usePriceThreshold: Boolean = true, // If true, filter by price threshold. If false, buy unconditionally.
     val isCalibrationEnabled: Boolean = false, // If true, calibration mode is active
+    val calibratedBuyX: Float = -1f,
+    val calibratedBuyY: Float = -1f,
+    val calibratedSellX: Float = -1f,
+    val calibratedSellY: Float = -1f,
     val calibratedOreX: Float = -1f,
     val calibratedOreY: Float = -1f,
     val calibratedCopperX: Float = -1f,
