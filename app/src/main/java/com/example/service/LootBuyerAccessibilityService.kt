@@ -747,19 +747,19 @@ class LootBuyerAccessibilityService : AccessibilityService() {
             }
         }
 
-        // STEP 2: FAST BOUNCE TO REFRESH TAB (SILVER) AND IMMEDIATELY RETURN TO TARGET TAB (COPPER)
+        // STEP 2: BOUNCE TO REFRESH TAB (SELL) AND RETURN TO TARGET TAB (BUY)
         AutoBuyerLogs.addLog("⚡ [ОБНОВЛЕНИЕ] Быстрый переход на '${getTabDisplayName(alternateTab)}' для сброса рынка...")
         clickAtWithRandomization(altCoords.first, altCoords.second, config)
 
-        // Ultra-fast bounce delay: just enough for the game webview to register the tap (30-60ms)
-        val bounceDelay = minOf(60L, maxOf(30L, config.tabSwitchIntervalMs / 4))
+        // Configurable bounce delay directly respecting user slider (tabSwitchIntervalMs) + randomization
+        val bounceDelay = getTabSwitchDelay(config)
         delay(bounceDelay)
 
-        AutoBuyerLogs.addLog("⚡ [ПЕРЕКЛЮЧЕНИЕ] Возврат на '${getTabDisplayName(targetCategoryTab)}' -> (${targetCoords.first.toInt()}, ${targetCoords.second.toInt()})")
+        AutoBuyerLogs.addLog("⚡ [ПЕРЕКЛЮЧЕНИЕ] Возврат на '${getTabDisplayName(targetCategoryTab)}' -> (${targetCoords.first.toInt()}, ${targetCoords.second.toInt()}) [Пауза: ${bounceDelay}мс]")
         clickAtWithRandomization(targetCoords.first, targetCoords.second, config)
 
-        // Webview stabilization wait: strictly on TARGET tab (Copper puzzles) where fresh lots load
-        val postSwitchSettleDelay = maxOf(40L, config.tabSwitchIntervalMs)
+        // Webview stabilization wait: strictly on TARGET tab (Buy) where fresh lots load, respecting user slider
+        val postSwitchSettleDelay = getTabSwitchDelay(config)
         delay(postSwitchSettleDelay)
 
         // Capture FRESH screen showing the target tab listings!

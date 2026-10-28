@@ -223,26 +223,31 @@ fun DashboardScreen(
         }
     }
 
-    // Update state when database configuration loads
+    var isInitializedFromDb by remember { mutableStateOf(false) }
+
+    // Update state when database configuration loads initially
     LaunchedEffect(config) {
         config?.let {
-            itemNameInput = it.targetItemName
-            thresholdInput = it.priceThreshold.toString()
-            isLessThan = it.isLessThanOperator
-            scanInterval = it.scanIntervalMs.toFloat()
-            tabSwitchInterval = it.tabSwitchIntervalMs.toFloat()
-            useViewScanning = it.useViewScanning
-            enableActualBuying = it.enableActualBuying
-            verboseOcrLogging = it.verboseOcrLogging
-            useSearchCycles = it.useSearchCycles
-            cycle1DurationInput = it.cycle1DurationMin.toString()
-            cycle2DurationInput = it.cycle2DurationMin.toString()
-            cycle3DurationInput = it.cycle3DurationMin.toString()
-            cycle1RandomRangeInput = it.cycle1RandomRangeSec.toString()
-            cycle2RandomRangeInput = it.cycle2RandomRangeSec.toString()
-            cycle3RandomRangeInput = it.cycle3RandomRangeSec.toString()
-            tabSwitchRandomizationInput = it.tabSwitchRandomizationMs.toString()
-            clickRandomizationRadiusInput = it.clickRandomizationRadiusPx.toString()
+            if (!isInitializedFromDb) {
+                itemNameInput = it.targetItemName
+                thresholdInput = it.priceThreshold.toString()
+                isLessThan = it.isLessThanOperator
+                scanInterval = it.scanIntervalMs.toFloat()
+                tabSwitchInterval = it.tabSwitchIntervalMs.toFloat()
+                useViewScanning = it.useViewScanning
+                enableActualBuying = it.enableActualBuying
+                verboseOcrLogging = it.verboseOcrLogging
+                useSearchCycles = it.useSearchCycles
+                cycle1DurationInput = it.cycle1DurationMin.toString()
+                cycle2DurationInput = it.cycle2DurationMin.toString()
+                cycle3DurationInput = it.cycle3DurationMin.toString()
+                cycle1RandomRangeInput = it.cycle1RandomRangeSec.toString()
+                cycle2RandomRangeInput = it.cycle2RandomRangeSec.toString()
+                cycle3RandomRangeInput = it.cycle3RandomRangeSec.toString()
+                tabSwitchRandomizationInput = it.tabSwitchRandomizationMs.toString()
+                clickRandomizationRadiusInput = it.clickRandomizationRadiusPx.toString()
+                isInitializedFromDb = true
+            }
         }
     }
 
@@ -873,19 +878,21 @@ fun DashboardScreen(
                     )
                 }
 
-                // Interval Ms Slider
+                // Interval Ms Slider (Search Delay / Scan Period)
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Search Delay / Scan Period:", color = Color.LightGray, fontSize = 12.sp)
+                        Text("Search Delay / Scan Period (Пауза между циклами):", color = Color.LightGray, fontSize = 12.sp)
                         Text("${scanInterval.toInt()} ms", color = Color(0xFFD0BCFF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     Slider(
                         value = scanInterval,
                         onValueChange = {
                             scanInterval = it
+                        },
+                        onValueChangeFinished = {
                             saveConfig()
                         },
                         valueRange = 50f..5000f,
@@ -894,6 +901,7 @@ fun DashboardScreen(
                             activeTrackColor = Color(0xFF2196F3)
                         )
                     )
+                    Text("💡 Время ожидания перед следующим поиском лотов на экране.", color = Color.Gray, fontSize = 10.sp)
                 }
 
                 // Tab Switch Delay Slider
@@ -902,21 +910,24 @@ fun DashboardScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Tab Switch Delay (OCR Mode):", color = Color.LightGray, fontSize = 12.sp)
+                        Text("Tab Switch Delay (Задержка переключения вкладок):", color = Color.LightGray, fontSize = 12.sp)
                         Text("${tabSwitchInterval.toInt()} ms", color = Color(0xFF4CAF50), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     Slider(
                         value = tabSwitchInterval,
                         onValueChange = {
                             tabSwitchInterval = it
+                        },
+                        onValueChangeFinished = {
                             saveConfig()
                         },
-                        valueRange = 50f..2000f,
+                        valueRange = 50f..3000f,
                         colors = SliderDefaults.colors(
                             thumbColor = Color(0xFF4CAF50),
                             activeTrackColor = Color(0xFF4CAF50)
                         )
                     )
+                    Text("💡 Задержка при переходе на Sell и возврате на Buy (чтобы игра успевала прогрузить вкладки).", color = Color.Gray, fontSize = 10.sp)
                 }
 
                 // Tab Switch Delay Randomization Slider / Input
@@ -932,9 +943,11 @@ fun DashboardScreen(
                         value = tabSwitchRandomizationInput.toFloatOrNull() ?: 50f,
                         onValueChange = {
                             tabSwitchRandomizationInput = it.toInt().toString()
-                            viewModel.updateTabSwitchRandomizationMs(it.toInt())
                         },
-                        valueRange = 0f..500f,
+                        onValueChangeFinished = {
+                            viewModel.updateTabSwitchRandomizationMs(tabSwitchRandomizationInput.toIntOrNull() ?: 50)
+                        },
+                        valueRange = 0f..1000f,
                         colors = SliderDefaults.colors(
                             thumbColor = Color(0xFFFF9800),
                             activeTrackColor = Color(0xFFFF9800)
@@ -956,7 +969,9 @@ fun DashboardScreen(
                         value = clickRandomizationRadiusInput.toFloatOrNull() ?: 10f,
                         onValueChange = {
                             clickRandomizationRadiusInput = it.toInt().toString()
-                            viewModel.updateClickRandomizationRadiusPx(it.toInt())
+                        },
+                        onValueChangeFinished = {
+                            viewModel.updateClickRandomizationRadiusPx(clickRandomizationRadiusInput.toIntOrNull() ?: 10)
                         },
                         valueRange = 0f..100f,
                         colors = SliderDefaults.colors(

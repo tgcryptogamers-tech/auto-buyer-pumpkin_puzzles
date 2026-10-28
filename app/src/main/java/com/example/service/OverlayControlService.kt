@@ -589,7 +589,7 @@ class OverlayControlService : Service() {
                     else -> gem.trim()
                 }
             }
-            configText?.text = "Вкладки: [$gemsSummary] | Лимит: ${config.priceThreshold}\nРежим: $scanMode"
+            configText?.text = "Вкладки: [$gemsSummary] | Лимит: ${config.priceThreshold}\nРежим: $scanMode | Задержки: ${config.scanIntervalMs} / ${config.tabSwitchIntervalMs}мс"
             
             if (config.autoBuyEnabled) {
                 toggleBtn?.text = "PAUSE MONITORING"
